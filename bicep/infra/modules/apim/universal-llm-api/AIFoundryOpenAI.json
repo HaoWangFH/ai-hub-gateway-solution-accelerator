@@ -2753,6 +2753,9 @@
       },
       "post": {
         "operationId": "Update_Vector_Store_File_Attributes",
+        "tags": [
+          "Vector Stores"
+        ],
         "description": "Update attributes on a vector store file.",
         "parameters": [
           {
@@ -2804,6 +2807,9 @@
     "/vector_stores/{vector_store_id}/files/{file_id}/content": {
       "get": {
         "operationId": "Retrieve_Vector_Store_File_Content",
+        "tags": [
+          "Vector Stores"
+        ],
         "description": "Retrieve the parsed contents of a vector store file.",
         "parameters": [
           {
@@ -2845,6 +2851,9 @@
     "/vector_stores/{vector_store_id}/search": {
       "post": {
         "operationId": "Search_Vector_Store",
+        "tags": [
+          "Vector Stores"
+        ],
         "description": "Search a vector store for relevant chunks based on a query and file attributes filter.",
         "parameters": [
           {

@@ -37,10 +37,19 @@ var normalizedBackendDetails = [for backend in backendDetails: {
   modelNames: map(backend.supportedModels, m => m.name)
 }]
 
-// Group backends by supported models to create backend pools
+// Group backends by (model, backendType) to create backend pools.
+// Composite key prevents collapse of the same model id served by two different
+// backend types (e.g. `eu.amazon.nova-lite-v1:0` registered against both an
+// `aws-bedrock` native pool and an `aws-bedrock-mantle` OpenAI-compat pool).
+// Without the composite key both backends would collapse into a single pool
+// whose `poolType` is whichever backend was processed first, breaking the
+// `compatiblePoolTypes` filter applied by the inbound API surface (Universal
+// LLM, Unified AI inference api-type, etc.). Delimiter `||` is not legal in
+// either model ids or backend types, so it never collides with a real key.
+var modelKeyDelimiter = '||'
 var modelToBackendsMap = reduce(normalizedBackendDetails, {}, (acc, backend) => union(acc, reduce(backend.modelNames, {}, (modelAcc, model) => union(modelAcc, {
-  '${model}': union(
-    contains(acc, model) ? acc[model] : [],
+  '${model}${modelKeyDelimiter}${backend.backendType}': union(
+    acc[?'${model}${modelKeyDelimiter}${backend.backendType}'] ?? [],
     [{
         backendId: backend.backendId
         backendType: backend.backendType
@@ -53,13 +62,20 @@ var modelToBackendsMap = reduce(normalizedBackendDetails, {}, (acc, backend) => 
   )
 }))))
 
-// Create pool configurations only for models supported by multiple backends
-// Note: Pool names must only contain letters, numbers, and hyphens (dots are stripped from model names)
+// Create pool configurations only for (model, backendType) combos served by multiple backends.
+// Pool name embeds the backendType so two pools for the same model id
+// (e.g. one `aws-bedrock`, one `aws-bedrock-mantle`) get distinct APIM resource
+// names. Special characters from provider model ids (`.`, `:`, `_`, `/`) are
+// stripped from both the model and backendType segments because APIM resource
+// names allow only letters/digits/hyphens. The original (unsanitized) model
+// name is still used as the routing key, so the request-processor /
+// set-target-backend-pool fragments keep matching by the real model name.
 var poolConfigs = map(
   filter(items(modelToBackendsMap), (item) => length(item.value) > 1),
   (item) => {
-    modelName: item.key
-    poolName: '${replace(item.key, '.', '')}-backend-pool'
+    modelName: split(item.key, modelKeyDelimiter)[0]
+    backendType: split(item.key, modelKeyDelimiter)[1]
+    poolName: '${replace(replace(replace(replace(split(item.key, modelKeyDelimiter)[0], '.', ''), ':', ''), '_', ''), '/', '')}-${replace(replace(replace(replace(split(item.key, modelKeyDelimiter)[1], '.', ''), ':', ''), '_', ''), '/', '')}-backend-pool'
     backends: item.value
   }
 )
@@ -108,7 +124,8 @@ output modelToBackendMap object = reduce(
   filter(items(modelToBackendsMap), (item) => length(item.value) == 1),
   {},
   (acc, item) => union(acc, {
-    '${item.key}': item.value[0].backendId
+    // item.key is the composite `${model}||${backendType}` — extract just the model id.
+    '${split(item.key, modelKeyDelimiter)[0]}': item.value[0].backendId
   })
 )
 
@@ -136,7 +153,8 @@ output policyFragmentConfig object = {
       poolType: item.value[0].backendType
       authType: item.value[0].authType
       authConfigNamedValue: item.value[0].authConfigNamedValue
-      supportedModels: [item.key]
+      // item.key is the composite `${model}||${backendType}` — extract just the model id.
+      supportedModels: [split(item.key, modelKeyDelimiter)[0]]
     }
   )
 }

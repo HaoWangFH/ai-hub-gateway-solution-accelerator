@@ -134,6 +134,16 @@
         return apiTypeConfig?["backend"]?.ToString() ?? String.Empty;
     }" />
 
+    <!-- Set compatiblePoolTypes from api-type config (comma-separated). When set, set-target-backend-pool
+         restricts pool selection to pools whose poolType is in this list. Used by native-path api-types
+         (bedrock-native, gemini-native, claude-native) to ensure /bedrock/ requests only go to aws-bedrock
+         pools, /gemini/ to gemini pools, /claude/ to anthropic pools — even when other pool types
+         (e.g. aws-bedrock-mantle) advertise the same model name. -->
+    <set-variable name="compatiblePoolTypes" value="@{
+        var apiTypeConfig = context.Variables.GetValueOrDefault<JObject>("api-type-config");
+        return apiTypeConfig?["compatible-pool-types"]?.ToString() ?? String.Empty;
+    }" />
+
     <!-- Signal that path-builder handles URI construction — set-backend-authorization should skip URL rewriting -->
     <set-variable name="skipBackendUrlRewrite" value="true" />
 
@@ -177,18 +187,57 @@
                 return "non-llm-request";
             }
 
-            // Try body first (works for all API types)
+            // Try body first (works for all API types — including claude-native /v1/messages where model is in body)
             var bodyModel = context.Variables.GetValueOrDefault<JObject>("parsed-request-body")?["model"]?.ToString();
             if (!String.IsNullOrEmpty(bodyModel))
             {
                 return bodyModel;
             }
 
+            var path = context.Variables.GetValueOrDefault<string>("routing-processed-path", String.Empty);
+
+            // bedrock-native: /bedrock/model/{modelId}/{operation}  (e.g. /bedrock/model/us.anthropic.claude/converse)
+            // modelId may contain '/' (inference-profile ARNs, e.g.
+            // arn:aws:bedrock:eu-north-1:123:inference-profile/eu.amazon.nova-lite-v1:0).
+            // Even when clients percent-encode '/' as %2F, APIM decodes it back to '/' in Url.Path.
+            // The operation suffix (converse|converse-stream|invoke|invoke-with-response-stream)
+            // is always the LAST path segment, so split on the LAST '/' instead of the first.
+            if (apiType.Equals("bedrock-native", StringComparison.OrdinalIgnoreCase))
+            {
+                var marker = "/model/";
+                var idx = path.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+                if (idx >= 0)
+                {
+                    var rest = path.Substring(idx + marker.Length);
+                    var slash = rest.LastIndexOf('/');
+                    var modelId = slash > 0 ? rest.Substring(0, slash) : rest;
+                    if (!String.IsNullOrEmpty(modelId)) { return System.Uri.UnescapeDataString(modelId); }
+                }
+            }
+
+            // gemini-native: /gemini/v1beta/models/{modelId}:{operation}  (e.g. /gemini/v1beta/models/gemini-2.5-flash:generateContent)
+            if (apiType.Equals("gemini-native", StringComparison.OrdinalIgnoreCase))
+            {
+                var marker = "/models/";
+                var idx = path.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+                if (idx >= 0)
+                {
+                    var rest = path.Substring(idx + marker.Length);
+                    // Model name terminates at ':' (operation suffix), '/' or end of path
+                    int end = rest.Length;
+                    foreach (var sep in new[] { ':', '/' }) {
+                        var p = rest.IndexOf(sep);
+                        if (p >= 0 && p < end) { end = p; }
+                    }
+                    var modelId = rest.Substring(0, end);
+                    if (!String.IsNullOrEmpty(modelId)) { return System.Uri.UnescapeDataString(modelId); }
+                }
+            }
+
             // Try path extraction using api-path-segment (e.g., /openai/deployments/{model}/...)
             var segment = context.Variables.GetValueOrDefault<string>("api-path-segment", String.Empty);
             if (!String.IsNullOrEmpty(segment))
             {
-                var path = context.Variables.GetValueOrDefault<string>("routing-processed-path", String.Empty);
                 var idx = path.IndexOf(segment + "/", StringComparison.OrdinalIgnoreCase);
                 if (idx >= 0)
                 {
@@ -204,20 +253,32 @@
         return String.Empty;
     }" />
 
-    <!-- Extract operation for openai-compat api-type (e.g., /v1/chat/completions → chat/completions) -->
+    <!-- Extract operation for openai-compat AND inference api-types so the path-builder
+         can look up provider-specific OpenAI-compat backend paths via
+         `backend-path-templates[poolType][operation]`. Universal LLM (api-type `inference`)
+         intentionally shares the same operation extraction so non-Foundry OpenAI-compat
+         providers (aws-bedrock-mantle, gemini-openai) get URL-rewritten the same way as
+         the Unified AI `openai-compat` surface.
+           Examples:
+             /v1/chat/completions      → chat/completions   (openai-compat)
+             /models/chat/completions  → chat/completions   (inference / Universal LLM)
+             /v1/embeddings            → embeddings
+             /models/embeddings        → embeddings -->
     <set-variable name="openai-compat-operation" value="@{
         var apiType = context.Variables.GetValueOrDefault<string>("api-type", "");
-        if (!apiType.Equals("openai-compat", StringComparison.OrdinalIgnoreCase)) {
+        if (!apiType.Equals("openai-compat", StringComparison.OrdinalIgnoreCase)
+            && !apiType.Equals("inference", StringComparison.OrdinalIgnoreCase)) {
             return String.Empty;
         }
         var path = context.Variables.GetValueOrDefault<string>("routing-processed-path", "");
-        // Remove /v1/ prefix to get the operation
-        var idx = path.IndexOf("/v1/", StringComparison.OrdinalIgnoreCase);
+        // Strip the api-type's base-path prefix to leave the operation segment.
+        // openai-compat base-path = /v1   ; inference base-path = /models
+        string prefix = apiType.Equals("openai-compat", StringComparison.OrdinalIgnoreCase) ? "/v1/" : "/models/";
+        var idx = path.IndexOf(prefix, StringComparison.OrdinalIgnoreCase);
         if (idx >= 0) {
-            return path.Substring(idx + 4).TrimEnd('/');
+            return path.Substring(idx + prefix.Length).TrimEnd('/');
         }
-        var trimmed = path.TrimStart('/');
-        return trimmed.Substring(Math.Min(3, trimmed.Length)).TrimStart('/');
+        return String.Empty;
     }" />
 
     <!-- Extract response-id for openai-compat responses operations (e.g., /v1/responses/{id}) -->

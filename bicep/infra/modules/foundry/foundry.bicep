@@ -284,6 +284,11 @@ module modelDeployments 'deployments.bicep' = [for (config, i) in aiServicesConf
   }
   dependsOn: [
     privateEndpoints
+    aiProject
+    aiProjectManagerRoleAssignment
+    roleAssignmentCognitiveServicesUser
+    appInsightsConnection
+    diagnosticSettings
   ]
 }]
 

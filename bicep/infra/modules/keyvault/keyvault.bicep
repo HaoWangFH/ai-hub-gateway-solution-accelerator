@@ -72,8 +72,13 @@ param dnsSubscriptionId string = ''
 param dnsZoneResourceId string = ''
 
 // RBAC assignments
-@description('Principal ID of the APIM managed identity for RBAC assignments')
+@description('Principal ID of the APIM user-assigned managed identity for RBAC assignments')
 param apimPrincipalId string = ''
+
+// NOTE: The APIM SYSTEM-assigned managed identity is granted Key Vault access
+// (Secrets User + Certificate User) by the dedicated `keyvault-apim-system-rbac.bicep`
+// module, which is invoked AFTER APIM is deployed (the system-assigned principal
+// does not exist until the APIM service is created).
 
 // Key Vault built-in roles
 var keyVaultSecretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6'

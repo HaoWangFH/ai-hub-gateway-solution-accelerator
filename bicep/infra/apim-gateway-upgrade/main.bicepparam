@@ -16,14 +16,10 @@ param enablePIIAnonymization = true
 param enableAIModelInference = true
 
 // =====================================================================
-//    NAMED VALUES (auth, Entra, PII, Content Safety)
+//    NAMED VALUES (PII, Content Safety)
 // =====================================================================
 
 param updateNamedValues = true
-param entraAuth = false
-param clientAppId = ' '
-// param tenantId — defaults to current tenant
-param audience = 'https://cognitiveservices.azure.com/.default'
 param aiLanguageServiceUrl = ''
 param contentSafetyServiceUrl = ''
 
@@ -46,30 +42,50 @@ param jwtAppRegistrationId = ''
 param updateLLMBackends = true
 param updateLLMBackendPools = true
 param updateLLMPolicyFragments = true
+
+// Anthropic API version sent in the anthropic-version header for `anthropic` backends.
+param anthropicVersion = '2023-06-01'
+
 param llmBackendConfig = [
-  // Example: Azure OpenAI backend
+  // Example reflecting the current AI Foundry-based implementation (two backends, each
+  // exposing multiple model deployments). Tip: copy the live value from your environment
+  // with `azd env get-value LLM_BACKEND_CONFIG` and paste it here (converted to Bicep object syntax).
+  //
+  // Authentication: prefer `authType` over the legacy `authScheme`. When omitted, authType is
+  // derived from backendType (ai-foundry/azure-openai → managed-identity), consistent with the
+  // llm-backend-onboarding package. For api-key backends add an `authConfig` object, e.g.:
+  //   authType: 'api-key-bearer'
+  //   authConfig: { namedValueKey: 'my-provider-key', keyVaultSecretUri: 'https://kv.vault.azure.net/secrets/my-provider-key' }
   // {
-  //   backendId: 'azure-openai-swedencentral'
-  //   backendType: 'azure-openai'
-  //   endpoint: 'https://my-openai.openai.azure.com'
-  //   authScheme: 'managedIdentity'
-  //   supportedModels: [
-  //     { name: 'gpt-4o', sku: 'GlobalStandard', capacity: 100, modelFormat: 'OpenAI', modelVersion: '2024-08-06' }
-  //   ]
-  //   priority: 1
-  //   weight: 100
-  // }
-  // Example: AI Foundry backend
-  // {
-  //   backendId: 'ai-foundry-eastus'
+  //   backendId: 'aif-REPLACE-0'
   //   backendType: 'ai-foundry'
-  //   endpoint: 'https://my-project.eastus.inference.ml.azure.com'
-  //   authScheme: 'managedIdentity'
-  //   supportedModels: [
-  //     { name: 'gpt-4o-mini', sku: 'GlobalStandard', capacity: 50, modelFormat: 'OpenAI', modelVersion: '2024-07-18' }
-  //   ]
+  //   endpoint: 'https://aif-REPLACE-0.cognitiveservices.azure.com/'
+  //   authType: 'managed-identity'
   //   priority: 1
   //   weight: 100
+  //   supportedModels: [
+  //     { name: 'gpt-4.1', sku: 'GlobalStandard', capacity: 100, modelFormat: 'OpenAI', modelVersion: '2025-04-14', apiVersion: '2025-04-01-preview', retirementDate: '2026-10-14', timeout: 180 }
+  //     { name: 'DeepSeek-R1', sku: 'GlobalStandard', capacity: 1, modelFormat: 'DeepSeek', modelVersion: '1', inferenceApiVersion: '2024-05-01-preview', retirementDate: '2099-12-30' }
+  //     { name: 'text-embedding-3-large', sku: 'GlobalStandard', capacity: 100, modelFormat: 'OpenAI', modelVersion: '1', retirementDate: '2027-04-14' }
+  //     { name: 'Mistral-Large-3', sku: 'GlobalStandard', capacity: 100, modelFormat: 'Mistral AI', modelVersion: '1', retirementDate: '2099-12-30' }
+  //     { name: 'gpt-5.4-mini', sku: 'GlobalStandard', capacity: 100, modelFormat: 'OpenAI', modelVersion: '2026-03-17', retirementDate: '2026-09-30' }
+  //     { name: 'Phi-4', sku: 'GlobalStandard', capacity: 1, modelFormat: 'Microsoft', modelVersion: '7', apiVersion: '2025-04-01-preview', retirementDate: '2099-10-14', timeout: 180 }
+  //   ]
+  // }
+  // {
+  //   backendId: 'aif-REPLACE-1'
+  //   backendType: 'ai-foundry'
+  //   endpoint: 'https://aif-REPLACE-1.cognitiveservices.azure.com/'
+  //   authType: 'managed-identity'
+  //   priority: 1
+  //   weight: 100
+  //   supportedModels: [
+  //     { name: 'Phi-4', sku: 'GlobalStandard', capacity: 1, modelFormat: 'Microsoft', modelVersion: '7', apiVersion: '2025-04-01-preview', retirementDate: '2099-10-14', timeout: 180 }
+  //     { name: 'gpt-5.4-mini', sku: 'GlobalStandard', capacity: 100, modelFormat: 'OpenAI', modelVersion: '2026-03-17', retirementDate: '2026-09-30' }
+  //     { name: 'gpt-5.2', sku: 'GlobalStandard', capacity: 100, modelFormat: 'OpenAI', modelVersion: '2025-12-11', retirementDate: '2027-02-05' }
+  //     { name: 'DeepSeek-R1', sku: 'GlobalStandard', capacity: 1, modelFormat: 'DeepSeek', modelVersion: '1', inferenceApiVersion: '2024-05-01-preview', retirementDate: '2099-12-30' }
+  //     { name: 'text-embedding-3-large', sku: 'GlobalStandard', capacity: 100, modelFormat: 'OpenAI', modelVersion: '1', retirementDate: '2027-04-14' }
+  //   ]
   // }
 ]
 
@@ -88,29 +104,10 @@ param updateUnifiedAiApi = true
 param enableUnifiedAiApi = true
 
 // =====================================================================
-//    AZURE AI SEARCH API
-// =====================================================================
-
-param updateAzureAISearchApi = false
-param aiSearchInstances = [
-  // {
-  //   name: 'my-search-instance'
-  //   description: 'Azure AI Search Service'
-  //   url: 'https://my-search.search.windows.net'
-  // }
-]
-
-// =====================================================================
 //    OPENAI REALTIME WEBSOCKET API
 // =====================================================================
 
 param updateOpenAIRealtimeApi = false
-
-// =====================================================================
-//    DOCUMENT INTELLIGENCE APIs
-// =====================================================================
-
-param updateDocumentIntelligenceApi = false
 
 // =====================================================================
 //    REDIS CACHE & EMBEDDINGS BACKEND

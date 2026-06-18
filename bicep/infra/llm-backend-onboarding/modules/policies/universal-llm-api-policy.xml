@@ -38,6 +38,14 @@
         <!-- Set default backend pool (empty = return error for unmapped models) -->
         <set-variable name="defaultBackendPool" value="" />
 
+        <!-- Universal LLM API is OpenAI-compatible only. Restrict pool selection to OpenAI-compat
+             pool types so that when a model name exists in both a native pool (e.g. aws-bedrock,
+             gemini, anthropic) and an OpenAI-compat pool (e.g. aws-bedrock-mantle, gemini-openai),
+             routing prefers the OpenAI-compat pool which has the correct URL rewrite branch in
+             frag-set-backend-authorization. Native-only pools have no /chat/completions surface
+             and would result in unrewritten paths reaching the provider. -->
+        <set-variable name="compatiblePoolTypes" value="azure-openai,ai-foundry,aws-bedrock-mantle,gemini-openai" />
+
         <!-- Step 3: Load backend pool configurations -->
         <include-fragment fragment-id="set-backend-pools" />
 

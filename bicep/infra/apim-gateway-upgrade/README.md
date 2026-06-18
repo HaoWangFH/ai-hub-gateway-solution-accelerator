@@ -1,4 +1,4 @@
-# APIM Gateway Upgrade
+# APIM Gateway Upgrade (PREVIEW)
 
 As the AI Governance Hub solution accelerator evolves, you may need to update the API Management gateway configuration to add new APIs, modify policies, or adjust logging settings. 
 
@@ -8,14 +8,24 @@ Notes:
 - Update the configuration of an **existing** API Management instance without re-provisioning the APIM service or surrounding landing-zone infrastructure. 
 - This deployment is designed to run **after** the main accelerator (`bicep/infra/main.bicep`) has provisioned the full environment.
 
+> [!TIP]
+> **Upgrading an APIM that the accelerator did NOT create?** Or one provisioned by an earlier
+> version of the Citadel Governance Hub where some supporting services are missing? Use the companion
+> **`supporting-services.bicep`** deployment in this folder to provision (or align an existing)
+> ecosystem of dependent services — Logic App + Storage, Cosmos DB, Event Hub, primary AI Foundry,
+> Key Vault, and managed identities — with a master on/off switch and per-service bring-your-own
+> options. It never changes the network configuration of an existing APIM or existing supporting
+> services. See **[gateway-ecosystem-upgrade-guide.md](./gateway-ecosystem-upgrade-guide.md)**, then
+> run `main.bicep` (this guide) to apply the APIM configuration.
+
 ## What this deployment updates
 
 | Category | Resources Updated |
 |---|---|
 | **Policy Fragments** | All static fragments (auth, usage, throttling, PII, AI Foundry, Unified AI) and dynamic LLM fragments (backend pools, authorization, target routing, model access) |
-| **APIs** | Universal LLM API, Azure OpenAI API, Unified AI Wildcard API, Azure AI Search API, OpenAI Realtime WebSocket API, Document Intelligence APIs — including OpenAPI specs, API-level policies, and operation-level policies |
+| **APIs** | Universal LLM API, Azure OpenAI API, Unified AI Wildcard API, OpenAI Realtime WebSocket API — including OpenAPI specs, API-level policies, and operation-level policies |
 | **LLM Backends** | Backend definitions, backend pools, and associated policy fragments for dynamic model routing |
-| **Named Values** | UAMI client ID, Entra auth flag, client/tenant/audience, PII service URL/key, Content Safety URL, JWT authentication values (TenantId, AppRegistrationId, Issuer, OpenIdConfigUrl) |
+| **Named Values** | UAMI client ID, PII service URL/key, Content Safety URL, JWT authentication values (TenantId, AppRegistrationId, Issuer, OpenIdConfigUrl) |
 | **Logging / Diagnostics** | APIM-level Application Insights diagnostic configuration and per-API Azure Monitor diagnostic configuration |
 | **Redis Cache** | APIM cache entity backed by Azure Managed Redis (for semantic caching) |
 | **Embeddings Backend** | APIM backend targeting AI Foundry embeddings endpoint (for semantic caching) |
@@ -32,6 +42,11 @@ Notes:
 - Modify networking, VNet, or private endpoint settings
 - Create managed identities, Key Vaults, or other infrastructure
 - Provision Azure Managed Redis (the Redis instance must already exist for cache updates)
+
+> [!NOTE]
+> Provisioning the dependent infrastructure (managed identities, Key Vault, Event Hub, Cosmos DB,
+> Microsoft Foundry, Storage + Logic App) is handled by the separate **`supporting-services.bicep`**
+> deployment — see **[gateway-ecosystem-upgrade-guide.md](./gateway-ecosystem-upgrade-guide.md)**.
 
 ## Prerequisites
 
@@ -65,8 +80,7 @@ param updateAzureOpenAIApi = false
 param updateUnifiedAiApi = false
 param updateAppInsightsDiagnostics = true
 param updateNamedValues = false
-param updateJwtNamedValues = false
-```
+param updateJwtNamedValues = false```
 
 ### 3. Configure LLM Backends
 
@@ -78,7 +92,7 @@ param llmBackendConfig = [
     backendId: 'azure-openai-swedencentral'
     backendType: 'azure-openai'
     endpoint: 'https://my-openai.openai.azure.com'
-    authScheme: 'managedIdentity'
+    authType: 'managed-identity'
     supportedModels: [
       { name: 'gpt-4o', sku: 'GlobalStandard', capacity: 100, modelFormat: 'OpenAI', modelVersion: '2024-08-06' }
     ]
@@ -104,7 +118,7 @@ az deployment group create --name gateway-upgrade-$(date +%Y%m%d%H%M) --resource
 | Changed LLM backend configuration (new models, endpoints) | **Yes** |
 | Updated policy fragments (usage tracking, PII, throttling) | **Yes** |
 | Tuning Application Insights or Azure Monitor log capture | **Yes** |
-| Updating named values (audience, PII URL, Content Safety URL) | **Yes** |
+| Updating named values (PII URL, Content Safety URL) | **Yes** |
 | Adding a new LLM backend or model to existing pools | **Yes** |
 | Updating JWT authentication configuration | **Yes** |
 | Updating Unified AI Wildcard API | **Yes** |
@@ -131,9 +145,7 @@ az deployment group create --name gateway-upgrade-$(date +%Y%m%d%H%M) --resource
 | `updateUniversalLLMApi` | `true` | Update Universal LLM API spec and policy |
 | `updateAzureOpenAIApi` | `true` | Update Azure OpenAI API spec and policy |
 | `updateUnifiedAiApi` | `true` | Update Unified AI Wildcard API, product, and policy |
-| `updateAzureAISearchApi` | `false` | Update Azure AI Search API spec and policy |
 | `updateOpenAIRealtimeApi` | `false` | Update OpenAI Realtime WebSocket API |
-| `updateDocumentIntelligenceApi` | `false` | Update Document Intelligence APIs |
 | `updateAppInsightsDiagnostics` | `true` | Update APIM-level App Insights diagnostics |
 | `updateNamedValues` | `true` | Update APIM named values |
 | `updateJwtNamedValues` | `true` | Update JWT authentication named values |
@@ -149,7 +161,6 @@ az deployment group create --name gateway-upgrade-$(date +%Y%m%d%H%M) --resource
 |---|---|---|
 | `enablePIIAnonymization` | `true` | Enable PII anonymization policy fragments |
 | `enableAIModelInference` | `true` | Enable AI model inference fragments |
-| `entraAuth` | `false` | Use Entra ID auth (disables subscription keys) |
 | `enableUnifiedAiApi` | `true` | Enable the Unified AI Wildcard API |
 | `enableJwtAuth` | `false` | Enable JWT authentication named values and security-handler fragment |
 | `jwtTenantId` | `''` | JWT Tenant ID (required when `enableJwtAuth` is true) |
@@ -168,9 +179,13 @@ az deployment group create --name gateway-upgrade-$(date +%Y%m%d%H%M) --resource
 
 ```
 apim-gateway-upgrade/
-├── main.bicep          # Deployment template (resource group scope)
-├── main.bicepparam     # Parameter file — configure before deploying
-└── README.md           # This guide
+├── main.bicep                          # APIM configuration upgrade (resource group scope)
+├── main.bicepparam                     # Parameter file — configure before deploying
+├── supporting-services.bicep           # Gateway ecosystem provisioning / alignment (create-or-BYO)
+├── supporting-services.bicepparam      # Supporting-services parameter file
+├── services/                           # Upgrade-scoped wrapper modules (create-or-BYO, optional PE)
+├── README.md                           # This guide
+└── gateway-ecosystem-upgrade-guide.md  # Guide for supporting-services.bicep
 ```
 
 All API specs, policy XML files, and sub-modules are referenced from `../modules/apim/` — no duplication of policy or spec files.

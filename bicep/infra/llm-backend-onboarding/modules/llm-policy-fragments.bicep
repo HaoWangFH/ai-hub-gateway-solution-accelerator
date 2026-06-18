@@ -48,10 +48,77 @@ param keyVaultName string = ''
 // Combine backend pools and direct backends for unified routing
 var allPools = union(policyFragmentConfig.backendPools, policyFragmentConfig.directBackends)
 
-// Generate C# code for each backend pool with unique variable names (includes authType and authConfigNamedValue)
+// Generate C# code for each backend pool with unique variable names. The
+// `authConfigNamedValue` field is informational only — the actual auth
+// header is configured natively on the APIM Backend resource (see
+// `credentials.header` in `llm-backends.bicep`), so the runtime policy
+// never has to resolve a named-value-key string back to its secret.
 var backendPoolsArray = [for (pool, index) in allPools: replace(replace(replace(replace(replace(replace('// Pool: POOLNAME (Type: POOLTYPE, Auth: AUTHTYPE)\nvar pool_INDEX = new JObject()\n{\n    { "poolName", "POOLNAME" },\n    { "poolType", "POOLTYPE" },\n    { "authType", "AUTHTYPE" },\n    { "authConfigNamedValue", "AUTHCONFIGNAMEDVALUE" },\n    { "supportedModels", new JArray(MODELS) }\n};\nbackendPools.Add(pool_INDEX);', 'POOLNAME', pool.poolName), 'POOLTYPE', pool.poolType), 'AUTHTYPE', pool.?authType ?? ''), 'AUTHCONFIGNAMEDVALUE', pool.?authConfigNamedValue ?? ''), 'INDEX', string(index)), 'MODELS', join(map(pool.supportedModels, (model) => '"${model}"'), ', '))]
 
-var backendPoolsCode = join(backendPoolsArray, '\n')
+var backendPoolsBaseCode = join(backendPoolsArray, '\n')
+
+// ============================================================================
+// MODEL ALIASES — virtual backend pools
+// ============================================================================
+// Each alias becomes a "virtual pool" entry inside the `backendPools` JArray
+// consumed by `set-target-backend-pool`. Members carry the **resolved**
+// poolName / poolType / authType / authConfigNamedValue at deploy time so
+// the runtime can fall back across providers (and across api surfaces) on
+// 429/5xx without re-walking the model→pool map.
+//
+// Shape rendered into the JArray (per alias):
+//   {
+//     "poolName": "alias:<aliasName>",
+//     "poolType": "alias",
+//     "isAlias":  true,
+//     "aliasName": "<aliasName>",
+//     "strategy": "priority" | "weighted",
+//     "supportedModels": ["<aliasName>"],   // so the existing model→pool match path
+//                                            // also locates the alias entry.
+//     "members": [
+//       {
+//         "model":  "<real-model-name>",
+//         "weight": <int>,                   // 1 for priority strategy; configured weight for weighted
+//         "pools":  [
+//           { "poolName": "...", "poolType": "...", "authType": "...", "authConfigNamedValue": "..." },
+//           ...                                // multiple entries when the same model is hosted by
+//                                              // both a native pool (e.g. `gemini`) and an OpenAI-compat
+//                                              // pool (e.g. `gemini-openai`). Runtime picks the first one
+//                                              // whose poolType matches the inbound api-type's
+//                                              // compatible-pool-types filter.
+//         ]
+//       }
+//     ]
+//   }
+// ============================================================================
+
+// JObject literal (string) for ONE underlying pool that hosts a given alias member model.
+// Indexed by [aliasIndex][memberIndex] = comma-separated list of JObject literals.
+// Bicep does not allow nested `for` inside a variable declaration, so the inner per-model
+// iteration uses `map(...)` (a function call) instead of a nested for-comprehension.
+var aliasMemberPoolsLiterals = [for aIdx in range(0, length(modelAliases)): map(
+  modelAliases[aIdx].models,
+  model => join(map(filter(allPools, pool => contains(pool.supportedModels, model)), p =>
+    'new JObject() { { "poolName", "${p.poolName}" }, { "poolType", "${p.poolType}" }, { "authType", "${p.?authType ?? ''}" }, { "authConfigNamedValue", "${p.?authConfigNamedValue ?? ''}" } }'
+  ), ', ')
+)]
+
+// `aliasMembers_<aIdx>.Add(...)` statements — one per member.
+var aliasMemberAddCodes = [for aIdx in range(0, length(modelAliases)): join(
+  map(range(0, length(modelAliases[aIdx].models)), mIdx =>
+    'aliasMembers_${aIdx}.Add(new JObject() { { "model", "${modelAliases[aIdx].models[mIdx]}" }, { "weight", ${contains(modelAliases[aIdx], 'weights') ? modelAliases[aIdx].weights[mIdx] : 1} }, { "pools", new JArray() { ${aliasMemberPoolsLiterals[aIdx][mIdx]} } } });'
+  ),
+  '\n'
+)]
+
+// Per-alias C# block that builds the alias virtual pool and pushes it onto `backendPools`.
+// Note: the for-expression body must stay on a single line — Bicep does not allow a newline
+// between the `:` and a string-literal body.
+var aliasPoolBlocks = [for i in range(0, length(modelAliases)): '// Alias pool: ${modelAliases[i].name} (strategy: ${modelAliases[i].?strategy ?? 'priority'})\nvar aliasMembers_${i} = new JArray();\n${aliasMemberAddCodes[i]}\nvar aliasPool_${i} = new JObject()\n{\n    { "poolName", "alias:${modelAliases[i].name}" },\n    { "poolType", "alias" },\n    { "isAlias", true },\n    { "aliasName", "${modelAliases[i].name}" },\n    { "strategy", "${modelAliases[i].?strategy ?? 'priority'}" },\n    { "supportedModels", new JArray("${modelAliases[i].name}") },\n    { "members", aliasMembers_${i} }\n};\nbackendPools.Add(aliasPool_${i});']
+
+var aliasPoolsCode = empty(modelAliases) ? '' : join(aliasPoolBlocks, '\n\n')
+
+var backendPoolsCode = empty(aliasPoolsCode) ? backendPoolsBaseCode : '${backendPoolsBaseCode}\n\n// ===== Model alias virtual pools (resolve to underlying real-model pools at runtime) =====\n${aliasPoolsCode}'
 
 // Load policy fragment templates
 var setBackendPoolsFragmentTemplate = loadTextContent('./policies/frag-set-backend-pools.xml')
@@ -119,12 +186,15 @@ var modelAliasesCode = join(modelAliasesEntriesWithWeights, ',\n')
 var updatedMetadataConfigFragmentXml = replace(updatedMetadataConfigStep1, '//{modelAliasesCode}', modelAliasesCode)
 
 // Generate inline-aliases C# code for the resolve-model-alias fragment.
-// This is the static fallback used by Azure OpenAI / Universal LLM APIs that don't load
-// metadata-config. Each alias becomes a JObject entry with models[], strategy, optional weights[].
-var inlineAliasesEntries = map(modelAliases, alias => '            { "${alias.name}", new JObject() { { "models", new JArray(${join(map(alias.models, m => '"${m}"'), ', ')}) }, { "strategy", "${alias.?strategy ?? 'priority'}" }${contains(alias, 'weights') ? ', { "weights", new JArray(WEIGHTS_PLACEHOLDER) }' : ''} } }')
-var inlineAliasWeightArgs = map(modelAliases, alias => contains(alias, 'weights') ? join(map(alias.weights, w => string(w)), ', ') : '')
-var inlineAliasesEntriesWithWeights = [for i in range(0, length(modelAliases)): replace(inlineAliasesEntries[i], 'WEIGHTS_PLACEHOLDER', inlineAliasWeightArgs[i])]
-var inlineAliasesCode = join(inlineAliasesEntriesWithWeights, ',\n')
+// As of the alias-as-virtual-pool refactor, alias **resolution** (alias-name → real
+// model + target pool) is performed by `frag-set-target-backend-pool.xml` directly
+// against the alias entries injected into the `backendPools` JArray above. The
+// resolve-model-alias fragment is now only responsible for the JSON body / URL
+// rewrite that runs AFTER set-target-backend-pool has set `is-alias`,
+// `original-model-alias`, and the resolved `requestedModel`. The inline-aliases
+// JObject is therefore no longer needed at runtime — we still emit a stub so the
+// fragment template stays valid.
+var inlineAliasesCode = ''
 var resolveModelAliasFragmentTemplate = loadTextContent('./policies/frag-resolve-model-alias.xml')
 var updatedResolveModelAliasFragmentXml = replace(resolveModelAliasFragmentTemplate, '//{inlineAliasesCode}', inlineAliasesCode)
 
@@ -180,24 +250,15 @@ resource awsRegionNamedValue 'Microsoft.ApiManagement/service/namedValues@2024-0
   }
 }
 
-// Dynamic named values for backend API key credentials
-// Backends with authConfig.namedValueKey and authConfig.keyVaultSecretUri use Key Vault references
-// Backends with authConfig.namedValueKey and authConfig.secretValue use explicit values (testing only)
-var backendAuthConfigs = filter(llmBackendConfig, config => !empty(config.?authConfig.?namedValueKey ?? ''))
+// Named value for Anthropic API version header (anthropic-version) is created
+// by the `llm-backends` module (Step 1 in main.bicep) so that the api-key-anthropic
+// backend's `credentials.header` reference to `{{anthropic-version}}` resolves at
+// backend create time. Do not re-declare it here.
 
-resource backendApiKeyNamedValues 'Microsoft.ApiManagement/service/namedValues@2024-06-01-preview' = [for config in backendAuthConfigs: {
-  name: config.authConfig.namedValueKey
-  parent: apimService
-  properties: {
-    displayName: config.authConfig.namedValueKey
-    secret: true
-    // Use Key Vault reference if keyVaultSecretUri is provided, otherwise use explicit value
-    keyVault: !empty(config.?authConfig.?keyVaultSecretUri ?? '') ? {
-      secretIdentifier: config.authConfig.keyVaultSecretUri
-    } : null
-    value: empty(config.?authConfig.?keyVaultSecretUri ?? '') ? (config.?authConfig.?secretValue ?? 'NOT_CONFIGURED') : null
-  }
-}]
+// Per-backend named values for `credentials.header` are now created by the
+// `llm-backends` module (which runs as Step 1 in main.bicep) so they exist
+// before the backend resources reference them. This module no longer needs to
+// declare them.
 
 // Policy Fragment: Set Backend Pools
 resource setBackendPoolsFragment 'Microsoft.ApiManagement/service/policyFragments@2024-06-01-preview' = {

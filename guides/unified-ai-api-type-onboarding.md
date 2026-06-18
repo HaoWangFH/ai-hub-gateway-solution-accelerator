@@ -26,6 +26,40 @@ Client Request → Request Processor (detect API type + extract model)
 
 Each step uses APIM policy fragments. Adding a new API type requires updates to specific fragments and configuration files.
 
+## Two Access Modes per Provider
+
+Most non-Azure providers can be onboarded under one or both of the following access modes. Pick the one(s) you need before editing fragments.
+
+| Mode | Inbound API surface | Path examples | Backend `poolType` | URL rewrite responsibility |
+|------|---------------------|----------------|--------------------|----------------------------|
+| **OpenAI-compatible** | Universal LLM (`/models/*`) **and** Unified AI `inference` (`/unified-ai/v1/*`) | `/models/chat/completions`, `/unified-ai/v1/chat/completions` | `azure-openai`, `ai-foundry`, `aws-bedrock-mantle`, `gemini-openai` | `frag-set-backend-authorization` (Universal LLM) or `frag-path-builder` via `config-backend-path-templates` (Unified AI inference) |
+| **Native (provider-specific)** | Unified AI prefixed paths only (`/unified-ai/{provider}/*`) | `/unified-ai/bedrock/model/{id}/converse`, `/unified-ai/gemini/v1beta/models/{id}:generateContent`, `/unified-ai/claude/v1/messages` | `aws-bedrock`, `gemini`, `anthropic` | `frag-path-builder` (per api-type `<when>` block) |
+
+Two design rules that protect surface isolation:
+
+1. **Universal LLM API restricts pool selection to OpenAI-compat pool types.** Its policy sets `compatiblePoolTypes="azure-openai,ai-foundry,aws-bedrock-mantle,gemini-openai"` before `set-target-backend-pool` runs. If the same model id is registered against both a native pool (e.g. `aws-bedrock`) and an OpenAI-compat pool (e.g. `aws-bedrock-mantle`), the gateway will only consider the OpenAI-compat pool — the native one has no `/chat/completions` rewrite branch and would let an unrewritten path reach the provider, returning errors like `com.amazon.coral.service#UnknownOperationException` from AWS Bedrock.
+2. **Each Unified AI api-type declares its own `compatible-pool-types`.** Native api-types like `bedrock` declare `compatible-pool-types: 'aws-bedrock'`; the OpenAI-compat `inference` api-type declares `compatible-pool-types: 'ai-foundry,azure-openai,aws-bedrock-mantle,gemini-openai'`. This keeps surfaces from cross-routing without relying on suffix tricks.
+
+When you add a new provider, decide whether you need:
+
+- **Native only** (e.g. provider has no OpenAI-compat surface): add a Unified AI api-type with its own prefix and `compatible-pool-types` matching its native pool type.
+- **OpenAI-compat only** (e.g. provider exposes only `/v1/chat/completions`): add the backend with a pool type already in Universal LLM's compatible list (`aws-bedrock-mantle`, `gemini-openai`, etc.). Add a `<when>` rewrite branch in `frag-set-backend-authorization` for Universal LLM, and a path template in `config-backend-path-templates` for the Unified AI `inference` api-type.
+- **Both**: define two backends (one per pool type) and update both the api-type entry and the OpenAI-compat artifacts.
+
+## Updating `set-llm-requested-model` for new providers
+
+The `set-llm-requested-model` fragment is invoked from **all three** LLM API policies (Universal LLM, Azure OpenAI, Unified AI request-processor falls back to it implicitly via shared logic) **and** from Citadel access-contract product policies (`default-ai-product-policy.xml`) so that `validate-model-access` can enforce `allowedModels` regardless of which surface the call lands on.
+
+Existing patterns it recognizes (in order):
+
+1. `deployment-id` named path parameter (Azure OpenAI named operations)
+2. `/deployments/{model}/...` segment (Azure OpenAI wildcards, `/openai/deployments/...`)
+3. `/model/{modelId}/...` singular segment (AWS Bedrock Converse / Invoke; URL-decoded)
+4. `/models/{modelId}:method` plural segment with `:` terminator (Gemini native; URL-decoded)
+5. Request body `model` field (OpenAI-compat, Anthropic Messages, Bedrock OpenAI-compat)
+
+If your new provider exposes the model in a different URL position (anything other than the patterns above) **or** in a body field other than `model`, you must extend `frag-set-llm-requested-model.xml` (both copies under `bicep/infra/modules/apim/policies/` and `bicep/infra/llm-backend-onboarding/modules/policies/`). Otherwise the access contract will return 400 `missing_model_parameter` for every native call, even when the request is valid for the provider.
+
 ## Prerequisites
 
 Before starting, ensure you have:
@@ -57,15 +91,18 @@ The `request-processor` fragment iterates over all entries in `api-types` and ma
 
 Add a new entry to the `api-types` object in the metadata config. The key is your API type identifier (used throughout all fragments).
 
-**Example — Adding Amazon Bedrock:**
+**Example — Adding Amazon Bedrock (native Converse / InvokeModel):**
 
 ```json
-'bedrock': {
-    'base-path': '/model',
-    'path-segment': '/model',
-    'api-version': 'bedrock-2024-04-15'
+'bedrock-native': {
+    'base-path': '/bedrock',
+    'path-segment': '/bedrock',
+    'api-version': 'bedrock-2024-04-15',
+    'compatible-pool-types': 'aws-bedrock'
 }
 ```
+
+The `compatible-pool-types` CSV restricts which backend pools the request can land on — here, only pools whose `poolType == 'aws-bedrock'`. This prevents the gateway from accidentally routing a `/unified-ai/bedrock/...` call to an `aws-bedrock-mantle` (OpenAI-compat) pool that happens to advertise the same model name. Native and OpenAI-compat surfaces stay isolated without requiring suffix tricks on model ids.
 
 #### Important Considerations
 
@@ -112,14 +149,16 @@ The path builder uses a `<choose>` block to select path construction logic based
 
 Add a new `<when>` block inside the `<choose>` element, before the default `<otherwise>` block.
 
-**Example — Amazon Bedrock path (`/model/{model}/converse`):**
+**Example — Amazon Bedrock path (strip the `/bedrock` prefix and forward the rest):**
 
 ```xml
-<!-- Amazon Bedrock: /model/{model}/converse -->
-<when condition="@(context.Variables.GetValueOrDefault<string>("api-type", "").Equals("bedrock", StringComparison.OrdinalIgnoreCase))">
+<!-- Amazon Bedrock native: /bedrock/model/{model}/converse → /model/{model}/converse -->
+<when condition="@(context.Variables.GetValueOrDefault<string>("api-type", "").Equals("bedrock-native", StringComparison.OrdinalIgnoreCase))">
     <set-variable name="finalPath" value="@{
-        var modelId = context.Variables.GetValueOrDefault<string>("requestedModel", String.Empty);
-        return !String.IsNullOrEmpty(modelId) ? $"/model/{System.Uri.EscapeDataString(modelId)}/converse" : String.Empty;
+        var basePath = context.Variables.GetValueOrDefault<string>("api-base-path", "");
+        var rawPath  = context.Request.OriginalUrl.Path;
+        var idx      = rawPath.IndexOf(basePath, StringComparison.OrdinalIgnoreCase);
+        return idx >= 0 ? rawPath.Substring(idx + basePath.Length) : rawPath;
     }" />
 </when>
 ```
@@ -131,9 +170,10 @@ Add a new `<when>` block inside the `<choose>` element, before the default `<oth
 | `{base-path}/chat/completions` | OpenAI-compatible APIs | Gemini, Inference |
 | `{base-path}/deployments/{model}/chat/completions` | Deployment-based APIs | Azure OpenAI |
 | `{base-path}` or `{base-path}/{id}` | Resource-based APIs | Responses API |
-| `/model/{model}/converse` | Provider-specific paths | Amazon Bedrock |
+| `/bedrock/model/{model}/converse` (prefix-strip) | Provider-specific native paths | Amazon Bedrock, Gemini native |
+| Fixed path with body-model rewrite | Provider-specific paths whose API has no model in URL | Anthropic Claude (`/claude/v1/messages`) |
 
-> **Stateful APIs (Responses API)** — When your new api-type exposes server-side stateful resources keyed by an id (similar to OpenAI's Responses API `response_id`), pair it with the cross-API `responses-id-security` / `responses-id-cache-store` fragments described in [llm-routing-architecture.md](llm-routing-architecture.md#step-15-responses-api-id-security-responses-id-security--responses-id-cache-store). Those fragments are wired in once per API policy and cover Universal LLM, Azure OpenAI, and Unified AI surfaces, returning **403** on cross-subscription access and **404** on unknown ids.
+> **Stateful APIs (Responses API)** — When your new api-type exposes server-side stateful resources keyed by an id (similar to OpenAI's Responses API `response_id`), pair it with the cross-API `responses-id-security` / `responses-id-cache-store` fragments described in [llm-access-guide.md](llm-access-guide.md#step-15-responses-api-id-security-responses-id-security--responses-id-cache-store). Those fragments are wired in once per API policy and cover Universal LLM, Azure OpenAI, and Unified AI surfaces, returning **403** on cross-subscription access and **404** on unknown ids.
 
 #### Additional Behaviors
 
@@ -240,7 +280,7 @@ Add your backend to the `llmBackendConfig` array in your `.bicepparam` file with
 | `backendId` | Unique identifier (e.g., `bedrock-us-east-1`) |
 | `backendType` | Your new type identifier (e.g., `aws-bedrock`) — must match the `targetPoolType` in auth fragment |
 | `endpoint` | Base URL of the provider (e.g., `https://bedrock-runtime.us-east-1.amazonaws.com`) |
-| `authScheme` | Authentication scheme (e.g., `awsSigV4`, `managedIdentity`, `apiKey`) |
+| `authType` | Authentication type (e.g., `aws-sigv4`, `managed-identity`, `api-key-bearer`). The legacy `authScheme` is still tolerated but superseded by `authType`. |
 | `supportedModels` | Array of model definitions with metadata |
 
 **Example — Amazon Bedrock backend:**
@@ -251,7 +291,7 @@ param llmBackendConfig = [
     backendId: 'bedrock-us-east-1'
     backendType: 'aws-bedrock'
     endpoint: 'https://bedrock-runtime.us-east-1.amazonaws.com'
-    authScheme: 'awsSigV4'
+    authType: 'aws-sigv4'
     supportedModels: [
       {
         "name": "us.anthropic.claude-3-5-haiku-20241022-v1:0"
@@ -313,7 +353,7 @@ az deployment sub create \
 Send a request through the Unified AI API using your new API type's path pattern:
 
 ```bash
-curl -X POST "https://<apim-gateway>/unified-ai/model/us.anthropic.claude-3-5-haiku-20241022-v1:0/converse" \
+curl -X POST "https://<apim-gateway>/unified-ai/bedrock/model/us.anthropic.claude-3-5-haiku-20241022-v1:0/converse" \
   -H "Content-Type: application/json" \
   -H "api-key: <subscription-key>" \
   -d '{
@@ -342,7 +382,7 @@ Then check the response headers:
 
 | Header | Expected Value |
 |--------|---------------|
-| `UAIG-API-Type` | `bedrock` |
+| `UAIG-API-Type` | `bedrock-native` |
 | `UAIG-Model-Id` | `us.anthropic.claude-3-5-haiku-20241022-v1:0` |
 | `UAIG-Backend` | `bedrock-us-east-1` |
 | `UAIG-Final-Path` | `/model/us.anthropic.claude-3-5-haiku-20241022-v1%3A0/converse` |
@@ -354,6 +394,8 @@ Then check the response headers:
 | `llm-backend-onboarding/modules/policies/frag-metadata-config.xml` | Add API type definition | Yes |
 | `modules/apim/policies/frag-metadata-config.xml` | Add API type definition (mirror) | Yes |
 | `modules/apim/policies/frag-path-builder.xml` | Add path construction logic | Yes |
+| `llm-backend-onboarding/modules/policies/frag-set-llm-requested-model.xml` | Add new URL/body model-extraction pattern | If provider's model location is not covered by existing patterns |
+| `modules/apim/policies/frag-set-llm-requested-model.xml` | Add new URL/body model-extraction pattern (mirror) | If provider's model location is not covered by existing patterns |
 | `llm-backend-onboarding/modules/policies/frag-set-backend-authorization.xml` | Add auth logic for new backend type | If new auth needed |
 | `modules/apim/policies/frag-set-backend-authorization.xml` | Add auth logic (mirror) | If new auth needed |
 | `llm-backend-onboarding/modules/llm-policy-fragments.bicep` | Add credential parameters and named values | If new credentials needed |
@@ -364,7 +406,9 @@ Then check the response headers:
 
 - [ ] API type added to `frag-metadata-config.xml` (both copies)
 - [ ] `base-path` is unique and doesn't conflict with existing API types
-- [ ] Path builder logic added to `frag-path-builder.xml`
+- [ ] `compatible-pool-types` set on the api-type to isolate native vs OpenAI-compat surfaces
+- [ ] Path builder logic added to `frag-path-builder.xml` (or `config-backend-path-templates` entry for OpenAI-compat under `inference`)
+- [ ] `set-llm-requested-model` extended (both copies) if provider's model location is not already covered
 - [ ] Backend auth logic added to `frag-set-backend-authorization.xml` (both copies, if new auth type)
 - [ ] Named values created for credentials (if applicable)
 - [ ] Parameters passed through `main.bicep` → `llm-policy-fragments.bicep`
@@ -378,11 +422,11 @@ Then check the response headers:
 For a complete working example of onboarding Amazon Bedrock as a new API type, see:
 
 - **Backend Configuration**: [LLM Backend Onboarding README](../bicep/infra/llm-backend-onboarding/README.md#amazon-bedrock-backend) — Amazon Bedrock backend example
-- **Routing Architecture**: [LLM Routing Architecture Guide](llm-routing-architecture.md) — Bedrock request flow and path construction
+- **Routing Architecture**: [LLM Access Guide](llm-access-guide.md) — Bedrock request flow and path construction
 - **APIM Integration**: [Microsoft Learn: Amazon Bedrock APIM Integration](https://learn.microsoft.com/en-us/azure/api-management/amazon-bedrock-passthrough-llm-api) — AWS SigV4 authentication policy details
 
 ## Related Guides
 
-- [LLM Routing Architecture](llm-routing-architecture.md) - Complete routing flow documentation
+- [LLM Access Guide](llm-access-guide.md) - Complete routing flow documentation
 - [LLM Backend Onboarding](../bicep/infra/llm-backend-onboarding/README.md) - Backend configuration reference
 - [Parameters Usage Guide](parameters-usage-guide.md) - Parameter file configuration

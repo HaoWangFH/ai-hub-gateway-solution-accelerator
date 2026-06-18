@@ -39,14 +39,8 @@ param updateUniversalLLMApi bool = true
 @description('Update the Azure OpenAI API definition and policy')
 param updateAzureOpenAIApi bool = true
 
-@description('Update the Azure AI Search API definition and policy')
-param updateAzureAISearchApi bool = false
-
 @description('Update the OpenAI Realtime WebSocket API definition and policy')
 param updateOpenAIRealtimeApi bool = false
-
-@description('Update the Document Intelligence API definitions and policies')
-param updateDocumentIntelligenceApi bool = false
 
 @description('Update APIM-level Application Insights diagnostic configuration')
 param updateAppInsightsDiagnostics bool = true
@@ -85,9 +79,6 @@ param enablePIIAnonymization bool = true
 @description('Enable AI Model Inference policy fragments')
 param enableAIModelInference bool = true
 
-@description('Use Entra ID authentication (disables subscription key requirement on APIs)')
-param entraAuth bool = false
-
 @description('Enable the Unified AI Wildcard API (3rd API alongside Azure OpenAI and Universal LLM)')
 param enableUnifiedAiApi bool = true
 
@@ -104,15 +95,6 @@ param jwtAppRegistrationId string = ''
 //    NAMED VALUE PARAMETERS
 // =====================================================================
 
-@description('Client App ID for Entra-based APIM authentication')
-param clientAppId string = ' '
-
-@description('Tenant ID for Entra ID authentication')
-param tenantId string = tenant().tenantId
-
-@description('OAuth audience for backend service authentication')
-param audience string = 'https://cognitiveservices.azure.com/.default'
-
 @description('URL of the Azure AI Language service (used for PII)')
 param aiLanguageServiceUrl string = ''
 
@@ -123,8 +105,16 @@ param contentSafetyServiceUrl string = ''
 //    LLM BACKEND CONFIGURATION
 // =====================================================================
 
-@description('Configuration array for LLM backends supporting multiple providers and models')
+@description('''Configuration array for LLM backends supporting multiple providers and models.
+Each backend object: { backendId, backendType, endpoint, supportedModels[], priority?, weight?,
+authType? ('managed-identity' | 'aws-sigv4' | 'api-key-bearer' | 'api-key-header' | 'api-key-gemini' | 'api-key-anthropic' | 'none'),
+authConfig? ({ namedValueKey, keyVaultSecretUri?, secretValue? }) }.
+When authType is omitted it is derived from backendType (ai-foundry/azure-openai → managed-identity),
+matching the llm-backend-onboarding module. The legacy `authScheme` field is still tolerated but superseded by authType.''')
 param llmBackendConfig array = []
+
+@description('Anthropic API version sent in the anthropic-version header for Anthropic backends (Messages API). Stored as the `anthropic-version` named value referenced by the backend credentials.header.')
+param anthropicVersion string = '2023-06-01'
 
 // =====================================================================
 //    REDIS CACHE & EMBEDDINGS CONFIGURATION
@@ -148,13 +138,6 @@ param embeddingsBackendUrl string = ''
 
 @description('APIM backend ID for the embeddings backend')
 param embeddingsBackendId string = 'foundry-embeddings'
-
-// =====================================================================
-//    AZURE AI SEARCH CONFIGURATION
-// =====================================================================
-
-@description('Array of AI Search instances to register as backends (only used when updateAzureAISearchApi is true)')
-param aiSearchInstances array = []
 
 // =====================================================================
 //    LOGGING / DIAGNOSTICS PARAMETERS
@@ -220,46 +203,6 @@ resource uamiNamedValue 'Microsoft.ApiManagement/service/namedValues@2022-08-01'
   }
 }
 
-resource entraAuthNamedValue 'Microsoft.ApiManagement/service/namedValues@2022-08-01' = if (updateNamedValues) {
-  name: 'entra-auth'
-  parent: apimService
-  properties: {
-    displayName: 'entra-auth'
-    secret: false
-    value: string(entraAuth)
-  }
-}
-
-resource clientIdNamedValue 'Microsoft.ApiManagement/service/namedValues@2022-08-01' = if (updateNamedValues) {
-  name: 'client-id'
-  parent: apimService
-  properties: {
-    displayName: 'client-id'
-    secret: true
-    value: clientAppId
-  }
-}
-
-resource tenantIdNamedValue 'Microsoft.ApiManagement/service/namedValues@2022-08-01' = if (updateNamedValues) {
-  name: 'tenant-id'
-  parent: apimService
-  properties: {
-    displayName: 'tenant-id'
-    secret: true
-    value: tenantId
-  }
-}
-
-resource audienceNamedValue 'Microsoft.ApiManagement/service/namedValues@2022-08-01' = if (updateNamedValues) {
-  name: 'audience'
-  parent: apimService
-  properties: {
-    displayName: 'audience'
-    secret: true
-    value: audience
-  }
-}
-
 resource piiServiceUrlNamedValue 'Microsoft.ApiManagement/service/namedValues@2022-08-01' = if (updateNamedValues && enablePIIAnonymization) {
   name: 'piiServiceUrl'
   parent: apimService
@@ -306,6 +249,9 @@ resource contentSafetyBackend 'Microsoft.ApiManagement/service/backends@2024-05-
       validateCertificateName: true
     }
     credentials: {
+      // 'managedIdentity' is a valid runtime credential for APIM backends but is not yet
+      // modeled in the BackendCredentialsContract Bicep type, so BCP037 is suppressed here.
+      #disable-next-line BCP037
       managedIdentity: {
         clientId: managedIdentity.properties.clientId
         resource: 'https://cognitiveservices.azure.com'
@@ -379,6 +325,9 @@ resource embeddingsBackend 'Microsoft.ApiManagement/service/backends@2024-06-01-
     url: embeddingsBackendUrl
     protocol: 'http'
     credentials: {
+      // 'managedIdentity' is a valid runtime credential for APIM backends but is not yet
+      // modeled in the BackendCredentialsContract Bicep type, so BCP037 is suppressed here.
+      #disable-next-line BCP037
       managedIdentity: {
         clientId: managedIdentity.properties.clientId
         resource: 'https://cognitiveservices.azure.com'
@@ -404,10 +353,6 @@ module policyFragments '../modules/apim/policy-fragments.bicep' = if (updatePoli
     enableUnifiedAiApi: enableUnifiedAiApi
   }
   dependsOn: [
-    clientIdNamedValue
-    entraAuthNamedValue
-    audienceNamedValue
-    tenantIdNamedValue
     piiServiceUrlNamedValue
     piiServiceKeyNamedValue
     jwtTenantIdNamedValue
@@ -428,6 +373,7 @@ module llmBackends '../modules/apim/llm-backends.bicep' = if (updateLLMBackends)
     managedIdentityClientId: managedIdentity.properties.clientId
     llmBackendConfig: llmBackendConfig
     configureCircuitBreaker: true
+    anthropicVersion: anthropicVersion
   }
 }
 
@@ -435,6 +381,9 @@ module llmBackendPools '../modules/apim/llm-backend-pools.bicep' = if (updateLLM
   name: 'llm-backend-pools-upgrade'
   params: {
     apimServiceName: apimService.name
+    // llmBackends is guaranteed to be deployed because this module's condition includes
+    // updateLLMBackends, so the output access is safe; suppress the null-safety warning.
+    #disable-next-line BCP318
     backendDetails: llmBackends.outputs.backendDetails
   }
 }
@@ -443,29 +392,14 @@ module llmPolicyFragments '../modules/apim/llm-policy-fragments.bicep' = if (upd
   name: 'llm-policy-fragments-upgrade'
   params: {
     apimServiceName: apimService.name
+    // llmBackendPools is guaranteed to be deployed because this module's condition includes
+    // updateLLMBackendPools, so the output access is safe; suppress the null-safety warning.
+    #disable-next-line BCP318
     policyFragmentConfig: llmBackendPools.outputs.policyFragmentConfig
     managedIdentityClientId: managedIdentity.properties.clientId
     llmBackendConfig: llmBackendConfig
   }
 }
-
-// =====================================================================
-//    AI SEARCH BACKENDS
-// =====================================================================
-
-resource aiSearchBackends 'Microsoft.ApiManagement/service/backends@2022-08-01' = [for (instance, i) in aiSearchInstances: if (updateAzureAISearchApi) {
-  name: instance.name
-  parent: apimService
-  properties: {
-    description: instance.description
-    url: instance.url
-    protocol: 'http'
-    tls: {
-      validateCertificateChain: true
-      validateCertificateName: true
-    }
-  }
-}]
 
 // =====================================================================
 //    APIs — Inference APIs (Universal LLM & Azure OpenAI)
@@ -477,10 +411,10 @@ module apiUniversalLLM '../modules/apim/inference-api.bicep' = if (updateUnivers
     apiManagementName: apimService.name
     inferenceAPIName: 'universal-llm-api'
     inferenceAPIPath: ''
-    inferenceAPIType: 'AzureAI'
+    inferenceAPIType: 'OpenAIV1'
     inferenceAPIDisplayName: 'Universal LLM API'
     inferenceAPIDescription: 'Universal LLM API to route requests to different LLM providers including Azure OpenAI, AI Foundry and 3rd party models.'
-    allowSubscriptionKey: entraAuth ? false : true
+    allowSubscriptionKey: true
     apimLoggerId: azMonitorLogger.id
     policyXml: loadTextContent('../modules/apim/policies/universal-llm-api-policy-v2.xml')
     azureMonitorLogSettings: azureMonitorLogSettings
@@ -503,7 +437,7 @@ module apimOpenaiApi '../modules/apim/inference-api.bicep' = if (updateAzureOpen
     inferenceAPIType: 'AzureOpenAI'
     inferenceAPIDisplayName: 'Azure OpenAI API'
     inferenceAPIDescription: 'Azure OpenAI API to route requests to different LLM providers including Azure OpenAI, AI Foundry and 3rd party models.'
-    allowSubscriptionKey: entraAuth ? false : true
+    allowSubscriptionKey: true
     apimLoggerId: azMonitorLogger.id
     policyXml: loadTextContent('../modules/apim/policies/azure-open-ai-api-policy.xml')
     azureMonitorLogSettings: azureMonitorLogSettings
@@ -560,6 +494,16 @@ resource universalLlmDeploymentByNameOperation 'Microsoft.ApiManagement/service/
   parent: universalLLMApi
 }
 
+resource universalLlmListModelsOperation 'Microsoft.ApiManagement/service/apis/operations@2022-08-01' existing = if (updateUniversalLLMApi) {
+  name: 'listModels'
+  parent: universalLLMApi
+}
+
+resource universalLlmRetrieveModelOperation 'Microsoft.ApiManagement/service/apis/operations@2022-08-01' existing = if (updateUniversalLLMApi) {
+  name: 'retrieveModel'
+  parent: universalLLMApi
+}
+
 resource universalLlmDeploymentOperationPolicy 'Microsoft.ApiManagement/service/apis/operations/policies@2022-08-01' = if (updateUniversalLLMApi) {
   name: 'policy'
   parent: universalLlmDeploymentOperation
@@ -572,6 +516,24 @@ resource universalLlmDeploymentOperationPolicy 'Microsoft.ApiManagement/service/
 resource universalLlmDeploymentByNameOperationPolicy 'Microsoft.ApiManagement/service/apis/operations/policies@2022-08-01' = if (updateUniversalLLMApi) {
   name: 'policy'
   parent: universalLlmDeploymentByNameOperation
+  properties: {
+    format: 'rawxml'
+    value: loadTextContent('../modules/apim/policies/universal-llm-api-deployment-by-name-policy.xml')
+  }
+}
+
+resource universalLlmListModelsOperationPolicy 'Microsoft.ApiManagement/service/apis/operations/policies@2022-08-01' = if (updateUniversalLLMApi) {
+  name: 'policy'
+  parent: universalLlmListModelsOperation
+  properties: {
+    format: 'rawxml'
+    value: loadTextContent('../modules/apim/policies/universal-llm-api-deployments-policy.xml')
+  }
+}
+
+resource universalLlmRetrieveModelOperationPolicy 'Microsoft.ApiManagement/service/apis/operations/policies@2022-08-01' = if (updateUniversalLLMApi) {
+  name: 'policy'
+  parent: universalLlmRetrieveModelOperation
   properties: {
     format: 'rawxml'
     value: loadTextContent('../modules/apim/policies/universal-llm-api-deployment-by-name-policy.xml')
@@ -616,31 +578,6 @@ resource openAIDeploymentByNameOperationPolicy 'Microsoft.ApiManagement/service/
 }
 
 // =====================================================================
-//    APIs — Azure AI Search
-// =====================================================================
-
-module apimAiSearchIndexApi '../modules/apim/api.bicep' = if (updateAzureAISearchApi) {
-  name: 'ai-search-index-api-upgrade'
-  params: {
-    serviceName: apimService.name
-    apiName: 'azure-ai-search-index-api'
-    path: 'search'
-    apiRevision: '1'
-    apiDispalyName: 'Azure AI Search Index API (index services)'
-    subscriptionRequired: entraAuth ? false : true
-    subscriptionKeyName: 'api-key'
-    openApiSpecification: loadTextContent('../modules/apim/ai-search-api/ai-search-index-2024-07-01-api-spec.json')
-    apiDescription: 'Azure AI Search Index Client APIs'
-    policyDocument: loadTextContent('../modules/apim/policies/ai-search-index-api-policy.xml')
-    enableAPIDeployment: true
-    enableAPIDiagnostics: false
-  }
-  dependsOn: [
-    policyFragments
-  ]
-}
-
-// =====================================================================
 //    APIs — OpenAI Realtime WebSocket
 // =====================================================================
 
@@ -652,7 +589,7 @@ module apimOpenAIRealtimeApi '../modules/apim/api.bicep' = if (updateOpenAIRealt
     path: 'openai/realtime'
     apiRevision: '1'
     apiDispalyName: 'Azure OpenAI Realtime API'
-    subscriptionRequired: entraAuth ? false : true
+    subscriptionRequired: true
     subscriptionKeyName: 'api-key'
     openApiSpecification: 'NA'
     apiDescription: 'Access Azure OpenAI Realtime API for real-time voice and text conversion.'
@@ -661,52 +598,6 @@ module apimOpenAIRealtimeApi '../modules/apim/api.bicep' = if (updateOpenAIRealt
     serviceUrl: 'wss://to-be-replaced-by-policy'
     apiType: 'websocket'
     apiProtocols: ['wss']
-    enableAPIDiagnostics: false
-  }
-  dependsOn: [
-    policyFragments
-  ]
-}
-
-// =====================================================================
-//    APIs — Document Intelligence
-// =====================================================================
-
-module apimDocumentIntelligenceLegacy '../modules/apim/api.bicep' = if (updateDocumentIntelligenceApi) {
-  name: 'doc-intel-legacy-api-upgrade'
-  params: {
-    serviceName: apimService.name
-    apiName: 'document-intelligence-api-legacy'
-    path: 'formrecognizer'
-    apiRevision: '1'
-    apiDispalyName: 'Document Intelligence API (Legacy)'
-    subscriptionRequired: entraAuth ? false : true
-    subscriptionKeyName: 'Ocp-Apim-Subscription-Key'
-    openApiSpecification: loadTextContent('../modules/apim/doc-intel-api/document-intelligence-2024-11-30-compressed.openapi.yaml')
-    apiDescription: 'Uses (/formrecognizer) url path. Extracts content, layout, and structured data from documents.'
-    policyDocument: loadTextContent('../modules/apim/policies/doc-intelligence-api-policy.xml')
-    enableAPIDeployment: true
-    enableAPIDiagnostics: false
-  }
-  dependsOn: [
-    policyFragments
-  ]
-}
-
-module apimDocumentIntelligence '../modules/apim/api.bicep' = if (updateDocumentIntelligenceApi) {
-  name: 'doc-intel-api-upgrade'
-  params: {
-    serviceName: apimService.name
-    apiName: 'document-intelligence-api'
-    path: 'documentintelligence'
-    apiRevision: '1'
-    apiDispalyName: 'Document Intelligence API'
-    subscriptionRequired: entraAuth ? false : true
-    subscriptionKeyName: 'Ocp-Apim-Subscription-Key'
-    openApiSpecification: loadTextContent('../modules/apim/doc-intel-api/document-intelligence-2024-11-30-compressed.openapi.yaml')
-    apiDescription: 'Uses (/documentintelligence) url path. Extracts content, layout, and structured data from documents.'
-    policyDocument: loadTextContent('../modules/apim/policies/doc-intelligence-api-policy.xml')
-    enableAPIDeployment: true
     enableAPIDiagnostics: false
   }
   dependsOn: [

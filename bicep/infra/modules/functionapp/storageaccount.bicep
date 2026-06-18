@@ -71,6 +71,7 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2022-05-01' = {
     minimumTlsVersion: 'TLS1_2'
     publicNetworkAccess: 'Disabled'
     allowBlobPublicAccess: false
+    allowSharedKeyAccess: true // Required for Logic Apps to access the storage account using connection strings
     accessTier: 'Hot'
     networkAcls: {
       bypass: 'AzureServices'

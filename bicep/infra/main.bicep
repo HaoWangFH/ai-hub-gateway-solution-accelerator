@@ -154,8 +154,8 @@ param functionAppSubnetPrefix string = '10.170.0.128/26'
 @description('AI Foundry agent (network injection) subnet address range. Used only when a new VNet is provisioned and foundryNetworkInjectionEnabled is true. Subnet is delegated to Microsoft.App/environments.')
 param agentSubnetPrefix string = '10.170.0.192/26'
 
-@description('Enable AI Foundry network injection by attaching the Foundry account to the agent subnet (delegated to Microsoft.App/environments). Defaults to true. When useExistingVnet is true the agentSubnetName must reference an existing subnet with the required delegation.')
-param foundryNetworkInjectionEnabled bool = true
+@description('Enable AI Foundry network injection by attaching the Foundry account to the agent subnet (delegated to Microsoft.App/environments). Defaults to FALSE. IMPORTANT: virtual network injection is only supported as part of the full Foundry Standard Agent setup (bring-your-own Azure Storage + Azure AI Search + Azure Cosmos DB plus an explicit project capabilityHost). This accelerator provisions the Foundry account as a gateway backend using Microsoft-managed agent resources, which is incompatible with injection - enabling it causes the agent capability host (aml_aiagentservice) to fail with "Invalid vnet resource ID provided, or the virtual network could not be found". Only enable this once the full BYO Standard Agent setup has been added. When useExistingVnet is true the agentSubnetName must reference an existing subnet with the required Microsoft.App/environments delegation.')
+param foundryNetworkInjectionEnabled bool = false
 
 // DNS ZONE PARAMETERS - DNS zone configuration for private endpoints (for use with existing VNet)
 @description('Resource group containing the DNS zones (only used with existing VNet when existingPrivateDnsZones is not provided - LEGACY).')
@@ -422,14 +422,14 @@ param aiSearchInstances array = [
   // }
 ]
 
-@description('AI Foundry instances configuration array. The first element (index 0) is the **primary** Foundry resource. The primary Foundry powers the APIM AI Gateway content safety and PII processing capabilities (via the AI Services unified endpoint) AND can also host LLM model deployments. Add more entries to deploy additional Foundry resources in different regions for additional LLM capacity / regional routing. All entries can host LLM deployments declared in aiFoundryModelsConfig. Each entry may optionally set `networkInjectionEnabled: true|false` to opt the specific Foundry resource into (or out of) agent network injection (delegated to Microsoft.App/environments). When omitted, the global `foundryNetworkInjectionEnabled` flag applies. Note: agent subnet is regional - only enable injection for instances in the same region as the VNet.')
+@description('AI Foundry instances configuration array. The first element (index 0) is the **primary** Foundry resource. The primary Foundry powers the APIM AI Gateway content safety and PII processing capabilities (via the AI Services unified endpoint) AND can also host LLM model deployments. Add more entries to deploy additional Foundry resources in different regions for additional LLM capacity / regional routing. All entries can host LLM deployments declared in aiFoundryModelsConfig. Each entry may optionally set `networkInjectionEnabled: true|false` to opt the specific Foundry resource into (or out of) agent network injection (delegated to Microsoft.App/environments). Per-instance values only take effect when the global `foundryNetworkInjectionEnabled` flag is also true. Note: agent subnet is regional - only enable injection for instances in the same region as the VNet, and only when the full Foundry Standard Agent BYO setup (Storage + AI Search + Cosmos DB + capabilityHost) is in place.')
 param aiFoundryInstances array = [
   {
     name: !empty(aiFoundryResourceName) ? aiFoundryResourceName : ''
     location: location
     customSubDomainName: ''
     defaultProjectName: 'citadel-governance-project'
-    networkInjectionEnabled: true
+    networkInjectionEnabled: false
   }
   {
     name: !empty(aiFoundryResourceName) ? aiFoundryResourceName : ''
@@ -594,9 +594,12 @@ var modelsGroupedByInstance = [for (instance, i) in aiFoundryInstances: {
  * 
  * Each backend object should have:
  * - backendId: Unique identifier (used in APIM backend resource name)
- * - backendType: 'ai-foundry' | 'azure-openai' | 'external'
+ * - backendType: 'ai-foundry' | 'azure-openai' | 'aws-bedrock' | 'aws-bedrock-mantle' | 'gemini' | 'gemini-openai' | 'anthropic' | 'external'
  * - endpoint: Base URL of the LLM service
- * - authScheme: 'managedIdentity' | 'apiKey' | 'token'
+ * - authScheme: (Legacy) 'managedIdentity' | 'apiKey' | 'token' — superseded by authType
+ * - authType: (Optional) 'managed-identity' | 'aws-sigv4' | 'api-key-bearer' | 'api-key-header' | 'api-key-gemini' | 'api-key-anthropic' | 'none'.
+ *             When omitted, it is derived from backendType (ai-foundry/azure-openai → managed-identity), matching the llm-backend-onboarding module.
+ * - authConfig: (Optional) { namedValueKey, keyVaultSecretUri?, secretValue? } for api-key-* auth types
  * - supportedModels: Array of model objects with:
  *     - name: Model name (required)
  *     - sku: SKU name for deployment (default: 'Standard')
@@ -620,7 +623,7 @@ var modelsGroupedByInstance = [for (instance, i) in aiFoundryInstances: {
     backendId: 'aif-REPLACE-0'
     backendType: 'ai-foundry'
     endpoint: 'https://aif-REPLACE-0.services.ai.azure.com/models'
-    authScheme: 'managedIdentity'
+    authType: 'managed-identity'
     supportedModels: [
       { name: 'gpt-4o-mini', sku: 'GlobalStandard', capacity: 100, modelFormat: 'OpenAI', modelVersion: '2024-07-18', retirementDate: '2026-09-30' }
       { name: 'gpt-4o', sku: 'GlobalStandard', capacity: 100, modelFormat: 'OpenAI', modelVersion: '2024-11-20', retirementDate: '2026-09-30' }
@@ -637,7 +640,7 @@ var modelsGroupedByInstance = [for (instance, i) in aiFoundryInstances: {
     backendId: 'aif-REPLACE-1'
     backendType: 'ai-foundry'
     endpoint: 'https://aif-REPLACE-1.services.ai.azure.com/models'
-    authScheme: 'managedIdentity'
+    authType: 'managed-identity'
     supportedModels: [
       { name: 'gpt-5', sku: 'GlobalStandard', capacity: 100, modelFormat: 'OpenAI', modelVersion: '2025-08-07', retirementDate: '2027-02-05' }
       { name: 'DeepSeek-R1', sku: 'GlobalStandard', capacity: 1, modelFormat: 'DeepSeek', modelVersion: '1', retirementDate: '2099-12-30', inferenceApiVersion: '2024-05-01-preview' }
@@ -654,7 +657,7 @@ var llmBackendConfig = [for (instance, i) in aiFoundryInstances: {
   backendId: !empty(instance.name) ? '${instance.name}-${i}' : 'aif-${resourceToken}-${i}'
   backendType: 'ai-foundry'
   endpoint: 'https://${!empty(instance.name) ? instance.name : 'aif-${resourceToken}-${i}'}.cognitiveservices.azure.com/'
-  authScheme: 'managedIdentity'
+  authType: 'managed-identity'
   supportedModels: modelsGroupedByInstance[i].models
   priority: 1
   weight: 100
@@ -807,6 +810,8 @@ module apimManagedIdentity './modules/security/managed-identity-apim.bicep' = {
   }
 }
 
+// The usage managed identity is created early (no dependency on Cosmos DB) so its principal has
+// time to replicate in AAD before the Cosmos SQL role assignment runs (see usageCosmosSqlRole).
 module usageManagedIdentity './modules/security/managed-identity-usage.bicep' = {
   name: 'logicapp-usage-managed-identity'
   scope: resourceGroup
@@ -814,7 +819,6 @@ module usageManagedIdentity './modules/security/managed-identity-usage.bicep' = 
     name: !empty(usageLogicAppIdentityName) ? usageLogicAppIdentityName : '${abbrs.managedIdentityUserAssignedIdentities}logicapp-${resourceToken}'
     location: location
     tags: tags
-    cosmosDbAccountName: cosmosDb.outputs.cosmosDbAccountName
   }
 }
 
@@ -989,6 +993,7 @@ module apim './modules/apim/apim.bicep' = {
     tags: tags
     applicationInsightsName: monitoring.outputs.apimApplicationInsightsName
     managedIdentityName: apimManagedIdentity.outputs.managedIdentityName
+    keyVaultName: keyVault.outputs.keyVaultName
     entraAuth: entraAuth
     clientAppId: resolvedEntraClientId
     tenantId: resolvedEntraTenantId
@@ -1033,6 +1038,19 @@ module apim './modules/apim/apim.bicep' = {
   }
 }
 
+// Grant the APIM SYSTEM-assigned managed identity (created by the apim module) read access
+// to Key Vault secrets and certificates. APIM uses its system-assigned identity to resolve
+// named-value Key Vault references, so this is required before any Key-Vault-backed named
+// value can be provisioned.
+module keyVaultApimSystemRbac './modules/keyvault/keyvault-apim-system-rbac.bicep' = {
+  name: 'kv-apim-system-rbac'
+  scope: resourceGroup
+  params: {
+    keyVaultName: keyVault.outputs.keyVaultName
+    apimSystemAssignedPrincipalId: apim.outputs.apimSystemAssignedPrincipalId
+  }
+}
+
 module cosmosDb './modules/cosmos-db/cosmos-db.bicep' = {
   name: 'cosmos-db'
   scope: resourceGroup
@@ -1051,6 +1069,19 @@ module cosmosDb './modules/cosmos-db/cosmos-db.bicep' = {
     dnsZoneResourceId: existingCosmosDbDnsZoneId
     throughput: cosmosDbRUs
     publicAccess: cosmosDbPublicAccess
+  }
+}
+
+// Grant the usage managed identity the Cosmos DB native data-contributor role. This is split into
+// its own deployment (after both Cosmos DB and the managed identity exist) so the identity's
+// principal has replicated in AAD, avoiding the transient "principal ID was not found in the AAD
+// tenant" error that Cosmos DB raises when validating a freshly created principal.
+module usageCosmosSqlRole './modules/cosmos-db/cosmos-sql-role-assignment.bicep' = {
+  name: 'logicapp-usage-cosmos-sql-role'
+  scope: resourceGroup
+  params: {
+    cosmosDbAccountName: cosmosDb.outputs.cosmosDbAccountName
+    principalId: usageManagedIdentity.outputs.managedIdentityPrincipalId
   }
 }
 

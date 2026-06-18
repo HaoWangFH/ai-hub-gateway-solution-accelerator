@@ -32,11 +32,12 @@ param apimManagedIdentity object
   description: '''
   Each backend object should have:
   - backendId: Unique identifier (used in APIM backend resource name)
-  - backendType: 'ai-foundry' | 'azure-openai' | 'aws-bedrock' | 'external'
+  - backendType: 'ai-foundry' | 'azure-openai' | 'aws-bedrock' | 'aws-bedrock-mantle' | 'gemini' | 'gemini-openai' | 'anthropic' | 'external'
   - endpoint: Base URL of the LLM service (e.g., https://xxx.services.ai.azure.com/models)
   - authScheme: 'managedIdentity' | 'apiKey' | 'token' (legacy, replaced by authType)
-  - authType: (Optional) 'managed-identity' | 'aws-sigv4' | 'api-key-bearer' | 'api-key-header' | 'none'
-  - authConfig: (Optional) { namedValueKey: 'apim-named-value-name' } — credential source for api-key auth types
+  - authType: (Optional) 'managed-identity' | 'aws-sigv4' | 'api-key-bearer' | 'api-key-header' | 'api-key-gemini' | 'api-key-anthropic' | 'none'
+  - authConfig: (Optional) { namedValueKey: 'apim-named-value-name', keyVaultSecretUri?: 'https://kv.vault.azure.net/secrets/...', secretValue?: '<plain text, testing only>' }
+                For api-key-* auth types, the named value resolves the credential at runtime. Prefer keyVaultSecretUri (managed by Key Vault, audited, rotatable). Use secretValue only for short-lived testing.
   - supportedModels: Array of model objects, each with:
     - name: Model name (required)
     - sku: (Optional) SKU name for deployment, default 'Standard'
@@ -55,7 +56,7 @@ param apimManagedIdentity object
       backendId: 'ai-foundry-eastus-gpt4'
       backendType: 'ai-foundry'
       endpoint: 'https://my-foundry.services.ai.azure.com/'
-      authScheme: 'managedIdentity'
+      authType: 'managed-identity'
       supportedModels: [
         { name: 'gpt-4o', sku: 'GlobalStandard', capacity: 100, modelFormat: 'OpenAI', modelVersion: '2024-11-20', retirementDate: '2026-09-30' }
         { name: 'gpt-4o-mini', sku: 'GlobalStandard', capacity: 100, modelFormat: 'OpenAI', modelVersion: '2024-07-18', retirementDate: '2026-09-30' }
@@ -81,6 +82,9 @@ param awsSecretKey string = ''
 
 @description('AWS region for Amazon Bedrock (e.g., us-east-1)')
 param awsRegion string = ''
+
+@description('Anthropic API version sent in the anthropic-version header for Anthropic backends (Messages API)')
+param anthropicVersion string = '2023-06-01'
 
 @description('Model alias definitions for grouping models under a single alias name')
 @metadata({
@@ -143,6 +147,7 @@ module llmBackends 'modules/llm-backends.bicep' = {
     managedIdentityClientId: managedIdentity.properties.clientId
     llmBackendConfig: llmBackendConfig
     configureCircuitBreaker: configureCircuitBreaker
+    anthropicVersion: anthropicVersion
   }
 }
 

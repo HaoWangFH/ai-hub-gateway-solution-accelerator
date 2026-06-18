@@ -16,8 +16,9 @@ The recommended execution order is:
 6. **PII Processing** — Test PII anonymization, deanonymization, and blocking policies
 7. **Unified AI API** — Test multi-provider routing patterns through the Unified AI Wildcard API
 8. **JWT Authentication** — Validate JWT-enforced and role-based access control across all API endpoints
+9. **Extended Providers Backend Onboarding** — Onboard and validate non-Microsoft-Foundry AI backends (AWS Bedrock, GCP Gemini, Anthropic Claude) through native and OpenAI-compatible routing to confirm multi-cloud support
 
-Each notebook is self-contained with initialization, deployment, testing, visualization, and cleanup stages, enabling both interactive exploration and repeatable CI/CD validation.
+Each notebook is self-contained with initialization, deployment, testing, visualization, and cleanup stages, enabling both interactive exploration and repeatable validation.
 
 ---
 
@@ -48,7 +49,9 @@ Before running any notebook, ensure the following are in place:
 | Entra ID App Registration | JWT Authentication | Client credentials (client ID + secret) with app roles configured |
 | MSAL Library | JWT Authentication | Optional — for interactive device code flow token acquisition |
 | Google Gemini API | Unified AI API | Optional — for testing Gemini routing pattern |
-
+| Unified AI API (`unified-ai`) imported in APIM | Extended Providers Backend Onboarding | Required for native `/bedrock/**`, `/gemini/**`, and `/claude/**` routing |
+| AWS Bedrock / GCP Gemini / Anthropic API keys | Extended Providers Backend Onboarding | Optional per provider — fill the `REPLACE_*` placeholders to enable each backend's tests |
+| Azure Key Vault (provider secrets) | Extended Providers Backend Onboarding | Optional — recommended over inline secrets to hold non-Azure provider keys |
 ---
 
 ## Initializing Variables from `azd` Environment
@@ -107,6 +110,7 @@ The table below summarizes which `azd` env variables each notebook auto-loads wh
 | `citadel-pii-processing-tests` | `AZURE_RESOURCE_GROUP` → `governance_hub_resource_group`<br>`AZURE_LOCATION` → `location`<br>*`COSMOS_DB_ACCOUNT_NAME` → `cosmos_account_endpoint`* |
 | `citadel-unified-ai-api-tests` | `AZURE_RESOURCE_GROUP` → `governance_hub_resource_group`<br>`AZURE_LOCATION` → `location` |
 | `citadel-jwt-authentication-tests` | `AZURE_RESOURCE_GROUP` → `governance_hub_resource_group`<br>`AZURE_LOCATION` → `location`<br>`AZURE_SUBSCRIPTION_ID` → `keyvault_subscription_id` / `foundry_subscription_id`<br>`ENTRA_TENANT_ID` → `entra_tenant_id`<br>`ENTRA_CLIENT_ID` → `entra_client_id`<br>`ENTRA_AUDIENCE` → `entra_audience` (defaults to `api://<client_id>` if missing)<br>*`KEY_VAULT_NAME` → `keyvault_name`*<br>*`AI_FOUNDRY_SERVICES[0]` (JSON) → `foundry_account_name` + `foundry_project_name`*<br>**Note:** `entra_client_secret` is intentionally **not** auto-loaded — set it manually before running JWT tests. |
+| `llm-backend-onboarding-extended-providers-runner` | `AZURE_RESOURCE_GROUP` → `governance_hub_resource_group`<br>`AZURE_LOCATION` → `location`<br>`LLM_BACKEND_CONFIG` (JSON) → merged with the extended-provider backends in `llm_backends_config`<br>*`KEY_VAULT_NAME` → `key_vault_name`*<br>**Note:** `init_from_azd` defaults to **`False`** here so the in-notebook `REPLACE_*` provider placeholders are preserved; flip to `True` to merge your azd-maintained Foundry backends with the new providers. |
 
 > **Multi-environment teams:** Run `azd env select <env-name>` before launching the notebook to switch which deployment the notebook talks to. Each `.azure/<env-name>/.env` file is fully self-contained.
 
@@ -158,9 +162,9 @@ location = "REPLACE"                       # e.g., "eastus", "swedencentral"
 llm_backends_config = [
     {
         "backendId": "aif-citadel-primary",
-        "backendType": "ai-foundry",           # 'ai-foundry' | 'azure-openai' | 'external'
+        "backendType": "ai-foundry",           # 'ai-foundry' | 'azure-openai' | 'aws-bedrock' | 'gemini' | 'anthropic' | 'external'
         "endpoint": "https://...",
-        "authScheme": "managedIdentity",        # 'managedIdentity' | 'apiKey' | 'token'
+        "authType": "managed-identity",        # 'managed-identity' | 'aws-sigv4' | 'api-key-bearer' | 'api-key-header' | 'api-key-gemini' | 'api-key-anthropic' | 'none' (omit to derive from backendType)
         "supportedModels": [
             { "name": "gpt-4o", "sku": "GlobalStandard", "capacity": 100, "modelFormat": "OpenAI", "modelVersion": "2024-11-20" }
         ],
@@ -655,6 +659,83 @@ requiredRoles = "Models.Read"
 
 ---
 
+### 9. Extended Providers Backend Onboarding (AWS Bedrock + GCP Gemini + Anthropic Claude)
+
+| | |
+|---|---|
+| **Notebook** | [`llm-backend-onboarding-extended-providers-runner.ipynb`](llm-backend-onboarding-extended-providers-runner.ipynb) |
+| **Purpose** | Onboard three non-Microsoft-Foundry LLM backends and validate native + OpenAI-compatible routing across both LLM API surfaces |
+| **Run this** | After backend onboarding (notebook 1). This notebook **extends** notebook 1 — it keeps the Foundry pipeline and adds the non-Azure backends. |
+
+#### What It Does
+
+This notebook extends the base LLM backend onboarding flow with three non-Azure backends authenticated by simple API keys (no AWS SigV4 or Workload Identity Federation required for validation). It generates a `.bicepparam` file with the new backend definitions, re-deploys the onboarding Bicep, provisions an access contract that allows every onboarded model, then validates each backend through its native API surface **and** its OpenAI-compatible surface. Each test cell self-skips when a provider's credentials are still `REPLACE_*`, so partial configurations never produce failures.
+
+#### Backends Onboarded
+
+| Backend type | Auth | Native path prefix | OpenAI-compat surface |
+|---|---|---|---|
+| `aws-bedrock` | `api-key-bearer` (Bedrock API key) | `/unified-ai/bedrock/model/{modelId}/converse` | — |
+| `aws-bedrock-mantle` | `api-key-bearer` | — | `/models/chat/completions` and `/unified-ai/v1/chat/completions` |
+| `gemini` | `api-key-gemini` (`x-goog-api-key`) | `/unified-ai/gemini/v1beta/models/{model}:generateContent` | — |
+| `gemini-openai` | `api-key-bearer` | — | `/models/chat/completions` and `/unified-ai/v1/chat/completions` |
+| `anthropic` | `api-key-anthropic` (`x-api-key` + `anthropic-version`) | `/unified-ai/claude/v1/messages` | — |
+
+#### API Surfaces Validated
+
+| API | Inbound path | Surface | Backends covered |
+|---|---|---|---|
+| **Universal LLM** | `/models/chat/completions` | OpenAI-compat | Foundry, Bedrock-Mantle, Gemini-OpenAI |
+| **Unified AI** | `/unified-ai/v1/chat/completions` | OpenAI-compat | Foundry, Bedrock-Mantle, Gemini-OpenAI |
+| **Unified AI** | `/unified-ai/bedrock/model/{modelId}/converse` | Native Bedrock Converse | `aws-bedrock` |
+| **Unified AI** | `/unified-ai/gemini/v1beta/models/{model}:generateContent` | Native Gemini | `gemini` |
+| **Unified AI** | `/unified-ai/claude/v1/messages` | Native Anthropic Messages | `anthropic` |
+
+#### Steps
+
+| Step | Description |
+|---|---|
+| 0 | **Initialize variables** — Configure resource group and per-provider credentials (inline secret or Key Vault URI); build the backend definitions and opt-in model aliases |
+| 1 | **Verify Azure CLI** — Confirm authentication and subscription context |
+| 2 | **Initialize APIM Client** — Connect to the existing Governance Hub deployment |
+| 3 | **Extract current backends** — Retrieve existing backend pools and routing configuration |
+| 4 | **Discover managed identity** — Auto-detect the APIM user-assigned managed identity |
+| 5 | **Generate parameter file** — Create a `.bicepparam` with the new backends, auth config, and aliases |
+| 6 | **Deploy** — Re-run the onboarding Bicep to add backends, pools, and policy fragments |
+| 7–8 | **Verify deployment** — Confirm backends, pools, and `get-available-models` fragment |
+| 9 | **Provision access contract** — Deploy an APIM product allowing every onboarded model + alias |
+| Test | **Validate routing** — OpenAI-compat (Universal LLM + Unified AI), native Bedrock / Gemini / Anthropic, and model-alias scenarios |
+
+#### Key Configuration
+
+```python
+init_from_azd = False   # keeps REPLACE_* provider placeholders; set True to merge azd Foundry backends
+
+governance_hub_resource_group = "REPLACE"
+location                      = "REPLACE"
+
+# Provider credentials — leave as REPLACE_* to skip a backend's tests
+aws_bedrock_region           = "eu-north-1"
+aws_bedrock_native_inline    = "REPLACE_AWS_BEDROCK_BEARER_VALUE"   # full "Bearer sk-..."
+gemini_native_inline         = "REPLACE_GEMINI_RAW_KEY"            # raw key for x-goog-api-key
+anthropic_inline             = "REPLACE_ANTHROPIC_RAW_KEY"         # raw key for x-api-key
+anthropic_version            = "2023-06-01"
+
+# Optional Key Vault to hold provider secrets (recommended over inline values)
+key_vault_name = "kv-REPLACE"
+```
+
+> **Secret format note:** APIM substitutes `{{namedValueKey}}` on a Backend resource only when it is the entire header value (no concatenation). Bearer-auth secrets must therefore store the **complete** header value (`Bearer sk-...`), while direct-key headers (`x-api-key`, `x-goog-api-key`) store the raw key. A provider with both a native and an OpenAI-compat surface (e.g. Gemini) needs two separate secrets.
+
+#### Output
+
+- Three native + two OpenAI-compat backends onboarded alongside the existing Foundry backends
+- Access contract allowing every onboarded model and alias
+- Per-surface validation results (native and OpenAI-compat) with `UAIG-*` debug headers
+- Optional model-alias scenarios (single-cloud weighted, cross-cloud OpenAI-compat, native Anthropic) that self-skip when members are unavailable
+
+---
+
 ## Recommended Execution Order
 
 > **Strongly recommended baseline:** run notebooks **1 → 4** in order on every new Citadel Governance Hub deployment. Steps **5 → 8** are optional, scenario-specific validations that can be run independently afterwards.
@@ -700,10 +781,16 @@ requiredRoles = "Models.Read"
                ▼
 ┌──────────────────────────────────────────────┐
 │  8. citadel-jwt-authentication-tests         │  Optional: JWT auth & RBAC
+└──────────────┬───────────────────────────────┘
+               │
+               ▼
+┌──────────────────────────────────────────────┐
+│  9. llm-backend-onboarding-extended-         │  Optional: AWS Bedrock + GCP Gemini +
+│     providers-runner                         │     Anthropic Claude (native + OpenAI-compat)
 └──────────────────────────────────────────────┘
 ```
 
-> **Note:** Notebooks 5–8 create their own access contracts and can be run independently after backend onboarding. Notebook 5 re-deploys the LLM backend onboarding Bicep with `modelAliases` populated (the `resolve-model-alias` fragment is regenerated; full cross-API coverage requires the Unified AI API to be imported), notebook 6 requires PII policy fragments (`pii-anonymization`, `pii-deanonymization`, `pii-state-saving`), notebook 7 requires the Unified AI API (`unified-ai`) to be imported into APIM, and notebook 8 requires JWT configuration plus an Entra ID app registration.
+> **Note:** Notebooks 5–9 create their own access contracts and can be run independently after backend onboarding. Notebook 5 re-deploys the LLM backend onboarding Bicep with `modelAliases` populated (the `resolve-model-alias` fragment is regenerated; full cross-API coverage requires the Unified AI API to be imported), notebook 6 requires PII policy fragments (`pii-anonymization`, `pii-deanonymization`, `pii-state-saving`), notebook 7 requires the Unified AI API (`unified-ai`) to be imported into APIM, notebook 8 requires JWT configuration plus an Entra ID app registration, and notebook 9 extends backend onboarding with non-Azure providers (native `/bedrock/**`, `/gemini/**`, and `/claude/**` routing requires the Unified AI API to be imported).
 
 ## Shared Utilities
 

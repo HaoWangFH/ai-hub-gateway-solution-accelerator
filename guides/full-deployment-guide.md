@@ -1010,7 +1010,7 @@ Visit the [Deployment Troubleshooting Guide](./#) for common issues and resoluti
 
 - **Deploy LLM Backends**
    - [Onboard Existing LLMs](./LLM-Backend-Onboarding-Guide.md)
-   - [LLM Routing Architecture](./llm-routing-architecture.md)
+   - [LLM Access Guide](./llm-access-guide.md)
 
 ---
 

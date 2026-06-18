@@ -96,9 +96,17 @@ resource unifiedAiProduct 'Microsoft.ApiManagement/service/products@2024-06-01-p
 }
 
 // Associate API with product
+// NOTE: The name is a string literal that matches the API name, so Bicep cannot infer a
+// dependency on the API resource. Without an explicit dependsOn, ARM may attempt to create
+// this product/API association before the 'unified-ai-api' API exists (since the product can
+// be created independently), causing intermittent deployment failures. The explicit dependsOn
+// guarantees the API is provisioned first.
 resource unifiedAiProductApi 'Microsoft.ApiManagement/service/products/apis@2024-06-01-preview' = if (enabled) {
   name: 'unified-ai-api'
   parent: unifiedAiProduct
+  dependsOn: [
+    unifiedAiApi
+  ]
 }
 
 // Product policy

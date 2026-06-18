@@ -44,7 +44,8 @@
             'geminiopenai': {
                 'base-path': '/v1beta/openai',
                 'path-segment': '/v1beta/openai',
-                'api-version': 'v1beta'
+                'api-version': 'v1beta',
+                'compatible-pool-types': 'gemini-openai'
             },
             'openai': {
                 'base-path': '/openai',
@@ -54,35 +55,69 @@
             'inference': {
                 'base-path': '/models',
                 'path-segment': '/models',
-                'api-version': '2024-05-01-preview'
+                'api-version': '2024-05-01-preview',
+                // Universal-LLM-style inference endpoint. Allow OpenAI-compatible pools
+                // (Foundry inference, Azure OpenAI, AWS Bedrock Mantle, Gemini OpenAI-compat).
+                // Per-provider URL rewriting is handled by path-builder via
+                // backend-path-templates[poolType][operation] when poolType is one of the
+                // non-Foundry providers; ai-foundry/azure-openai keep the legacy
+                // {base-path}/chat/completions shape.
+                'compatible-pool-types': 'ai-foundry,azure-openai,aws-bedrock-mantle,gemini-openai'
             },
-            'bedrock': {
-                'base-path': '/model',
+            // Native API access via /<provider>/ prefix. Each one strips its own prefix and
+            // forwards the remainder of the path unchanged to the backend, then filters
+            // pool selection by 'compatible-pool-types' so only the matching native pool
+            // (e.g. aws-bedrock for /bedrock/, gemini for /gemini/, anthropic for /claude/)
+            // can serve the request even if other pools (e.g. aws-bedrock-mantle) advertise
+            // the same model name.
+            'bedrock-native': {
+                'base-path': '/bedrock',
                 'path-segment': '/model',
-                'api-version': 'bedrock-2024-04-15'
+                'api-version': 'bedrock-2024-04-15',
+                'compatible-pool-types': 'aws-bedrock'
+            },
+            'gemini-native': {
+                'base-path': '/gemini',
+                'path-segment': '/models',
+                'api-version': 'v1beta',
+                'compatible-pool-types': 'gemini'
+            },
+            'claude-native': {
+                'base-path': '/claude',
+                'path-segment': '/v1/messages',
+                'api-version': 'anthropic-2023-06-01',
+                'compatible-pool-types': 'anthropic'
             },
             'openai-compat': {
                 'base-path': '/v1',
                 'path-segment': '',
-                'api-version': 'v1'
+                'api-version': 'v1',
+                'compatible-pool-types': 'ai-foundry,azure-openai,aws-bedrock-mantle,gemini-openai'
             }
         },
         'model-aliases': {
             //{modelAliasesCode}
         },
         'backend-path-templates': {
+            // ai-foundry / azure-openai use the v1 OpenAI-compatible endpoint family
+            // (`/openai/v1/...`). This endpoint accepts `api-version=v1` (which is
+            // what the `inference` and `openai-compat` api-types set), reads the
+            // model from the request body, and avoids the AOAI deployments path
+            // (`/openai/deployments/{model}/...`) that requires a real preview
+            // api-version (e.g. `2024-12-01-preview`). Keep `/openai/responses`
+            // for the Responses API which retains its own URL contract.
             'ai-foundry': {
-                'chat/completions': '/openai/deployments/{model}/chat/completions',
-                'embeddings': '/openai/deployments/{model}/embeddings',
-                'responses': '/openai/responses',
-                'images/generations': '/openai/deployments/{model}/images/generations',
-                'models': '/models'
+                'chat/completions': '/openai/v1/chat/completions',
+                'embeddings': '/openai/v1/embeddings',
+                'responses': '/openai/v1/responses',
+                'images/generations': '/openai/v1/images/generations',
+                'models': '/openai/v1/models'
             },
             'azure-openai': {
-                'chat/completions': '/openai/deployments/{model}/chat/completions',
-                'embeddings': '/openai/deployments/{model}/embeddings',
-                'responses': '/openai/responses',
-                'images/generations': '/openai/deployments/{model}/images/generations'
+                'chat/completions': '/openai/v1/chat/completions',
+                'embeddings': '/openai/v1/embeddings',
+                'responses': '/openai/v1/responses',
+                'images/generations': '/openai/v1/images/generations'
             },
             'aws-bedrock-mantle': {
                 'chat/completions': '/v1/chat/completions',
@@ -94,6 +129,10 @@
             },
             'aws-bedrock': {
                 'chat/completions': '/model/{model}/converse'
+            },
+            'anthropic': {
+                'chat/completions': '/v1/messages',
+                'messages': '/v1/messages'
             }
         },
         'cache-settings': {

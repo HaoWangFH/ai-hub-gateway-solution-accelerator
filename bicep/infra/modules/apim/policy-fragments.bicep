@@ -15,6 +15,8 @@ param apimServiceName string
 param enablePIIAnonymization bool = true
 
 @description('Enable AI Model Inference features')
+// Retained for interface compatibility with callers; not referenced within this module.
+#disable-next-line no-unused-params
 param enableAIModelInference bool = true
 
 @description('Enable Unified AI API features')
