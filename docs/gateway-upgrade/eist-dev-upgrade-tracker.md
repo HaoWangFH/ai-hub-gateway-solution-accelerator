@@ -59,23 +59,20 @@ $uamiClientId = az identity show `
 Write-Host "UAMI client ID: $uamiClientId"
 
 # 2. Create uami-client-id named value
-$uamiBody = @"
-{
-  "properties": {
-    "displayName": "uami-client-id",
-    "secret": true,
-    "value": "$uamiClientId"
-  }
-}
-"@
+$uamiBody = @{properties=@{displayName="uami-client-id";secret=$true;value=$uamiClientId}} | ConvertTo-Json -Depth 3 -Compress
+$uamiBody | Out-File -Encoding ascii -FilePath body.json
+
 az rest --method put `
   --url "https://management.azure.com/subscriptions/8ec4d8c8-09af-4f21-8d34-2caa6384fe4e/resourceGroups/RG-EIST-APIM-dev/providers/Microsoft.ApiManagement/service/apim-eist-dev/namedValues/uami-client-id?api-version=2022-08-01" `
-  --body $uamiBody
+  --body "@body.json"
 
-# 3. Create piiServiceUrl named value (empty placeholder — PII not configured yet)
+# 3. Create piiServiceUrl named value (placeholder — PII not configured yet)
+$piiBody = @{properties=@{displayName="piiServiceUrl";secret=$false;value="placeholder"}} | ConvertTo-Json -Depth 3 -Compress
+$piiBody | Out-File -Encoding ascii -FilePath pii_body.json
+
 az rest --method put `
   --url "https://management.azure.com/subscriptions/8ec4d8c8-09af-4f21-8d34-2caa6384fe4e/resourceGroups/RG-EIST-APIM-dev/providers/Microsoft.ApiManagement/service/apim-eist-dev/namedValues/piiServiceUrl?api-version=2022-08-01" `
-  --body '{"properties":{"displayName":"piiServiceUrl","secret":false,"value":""}}'
+  --body "@pii_body.json"
 ```
 
 ### Part B — Provision Event Hub (fixes `ai-usage` fragment)
@@ -88,12 +85,13 @@ az eventhubs namespace create `
   --location canadacentral `
   --sku Standard
 
-# 2. Create the ai-usage event hub inside it
+# 2. Create the ai-usage hub
 az eventhubs eventhub create `
   --name ai-usage `
   --namespace-name evhns-eist-apim-dev `
   --resource-group RG-EIST-APIM-dev `
-  --message-retention 7 `
+  --cleanup-policy Delete `
+  --retention-time-in-hours 168 `
   --partition-count 4
 
 # 3. Get namespace resource ID for RBAC
@@ -126,22 +124,23 @@ $uamiClientId = az identity show `
   --query clientId -o tsv
 
 # Create usage-eventhub-logger on apim-eist-dev
-$loggerBody = @"
-{
-  "properties": {
-    "loggerType": "azureEventHub",
-    "description": "Event Hub logger for OpenAI usage metrics",
-    "credentials": {
-      "name": "ai-usage",
-      "endpointAddress": "evhns-eist-apim-dev.servicebus.windows.net:443/",
-      "identityClientId": "$uamiClientId"
+$loggerBodyObj = @{
+    properties = @{
+        loggerType = "azureEventHub"
+        description = "Event Hub logger for OpenAI usage metrics"
+        credentials = @{
+            endpointAddress = "evhns-eist-apim-dev.servicebus.windows.net"
+            identityClientId = $uamiClientId
+            name = "ai-usage"
+        }
     }
-  }
 }
-"@
+$loggerBody = $loggerBodyObj | ConvertTo-Json -Depth 5 -Compress
+$loggerBody | Out-File -Encoding ascii -FilePath logger_body.json
+
 az rest --method put `
   --url "https://management.azure.com/subscriptions/8ec4d8c8-09af-4f21-8d34-2caa6384fe4e/resourceGroups/RG-EIST-APIM-dev/providers/Microsoft.ApiManagement/service/apim-eist-dev/loggers/usage-eventhub-logger?api-version=2022-08-01" `
-  --body $loggerBody
+  --body "@logger_body.json"
 
 # Verify logger was created
 az rest --method get `
@@ -362,11 +361,22 @@ Use the validation notebooks:
 | Step | Description | Status |
 |---|---|---|
 | 0 | Environment assessment | ✅ Done |
-| 1a | Pre-flight: Create Event Hub logger + named value placeholders | ⏳ Pending |
-| 1 | APIs + policy framework deployment | ❌ Failed — re-run after Step 1a |
+| 1a | Pre-flight: Create Event Hub logger + named value placeholders | ✅ Done |
+| 1 | APIs + policy framework deployment | ✅ Done |
 | 2 | Verify VNet connectivity to LLM endpoints | ⏳ Pending |
 | 3 | Onboard LLM backends | ⏳ Pending |
 | 4 | Configure PII & Content Safety named values | ⏳ Pending |
 | 5 | JWT / Entra ID authentication (optional) | ⏳ Pending |
 | 6 | Create access contracts | ⏳ Pending |
 | 7 | End-to-end validation | ⏳ Pending |
+
+---
+
+## Known Issues & Bugs Encountered
+
+1. **`pii-state-saving` Logger Bug**: In `bicep/infra/modules/apim/policies/frag-pii-state-saving.xml`, the code hardcoded `<log-to-eventhub logger-id="pii-usage-eventhub-logger">`. This causes deployments to fail because the standard logger created by the accelerator is named `usage-eventhub-logger`.
+   - *Fix applied: Updated the XML to point to `usage-eventhub-logger`.*
+2. **APIM Backend URL Validation**: APIM backends require valid URLs (must start with `http://` or `https://`). Passing an empty string `''` or a generic string like `'placeholder'` for the `contentSafetyServiceUrl` will cause the `content-safety-backend` deployment to fail validation.
+   - *Fix applied: Updated `main-eist-dev.bicepparam` to use `'https://placeholder.com'`.*
+3. **Hardcoded Fragment Dependencies**: The `unified-ai-api` and `universal-llm-api` XML policies have a hardcoded `<include-fragment fragment-id="ai-foundry-compatibility" />`. Because Bicep only conditionally creates this fragment if `enablePIIAnonymization = true`, turning PII off will crash the API deployments.
+   - *Fix applied: Forced `enablePIIAnonymization = true` in the parameters file to ensure all required fragments are deployed.*

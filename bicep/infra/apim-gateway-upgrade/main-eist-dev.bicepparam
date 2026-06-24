@@ -17,9 +17,8 @@ param managedIdentityName = 'mi-EIST-apim-dev'
 param updatePolicyFragments  = true
 param enableAIModelInference = true
 
-// PII disabled — no AI Language Service endpoint configured yet
-// Set aiLanguageServiceUrl and flip to true once AI Foundry / Language Service is available
-param enablePIIAnonymization = false
+// PII enabled to allow creation of dependent policy fragments
+param enablePIIAnonymization = true
 
 // =====================================================================
 //    NAMED VALUES (PII, Content Safety)
@@ -37,8 +36,8 @@ param enablePIIAnonymization = false
 // =====================================================================
 
 param updateNamedValues       = true
-param aiLanguageServiceUrl    = ''   // TODO: fill with AI Foundry endpoint once VNet connectivity confirmed
-param contentSafetyServiceUrl = ''   // TODO: fill with AI Foundry endpoint once VNet connectivity confirmed
+param aiLanguageServiceUrl    = 'https://placeholder.com' // Must be valid URL format
+param contentSafetyServiceUrl = 'https://placeholder.com' // Must be valid URL format
 
 // =====================================================================
 //    JWT AUTHENTICATION NAMED VALUES
@@ -56,9 +55,9 @@ param jwtAppRegistrationId    = ''
 //    flags to true once backends are confirmed reachable.
 // =====================================================================
 
-param updateLLMBackends        = false
-param updateLLMBackendPools    = false
-param updateLLMPolicyFragments = false
+param updateLLMBackends        = true
+param updateLLMBackendPools    = true
+param updateLLMPolicyFragments = true
 param anthropicVersion         = '2023-06-01'
 
 param llmBackendConfig = [
