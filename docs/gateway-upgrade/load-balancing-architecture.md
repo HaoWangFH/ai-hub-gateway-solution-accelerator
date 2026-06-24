@@ -73,3 +73,25 @@ When an end-user sends a request to the gateway (e.g., asking for `gpt-4o`), the
 Because **Weight** is scoped to the endpoint server:
 * If an external team provides an endpoint hosting multiple models (e.g., `gpt-4o` and `claude-3`), the single `weight` parameter assigned to their endpoint will dictate their traffic share for *both* models.
 * If an external team explicitly wants to absorb 80% of `gpt-4o` traffic but only 20% of `claude-3` traffic, they must provide **two separate URLs/endpoints**, or the internal APIM team must duplicate their backend configuration block in the `.bicepparam` file under two different `backendId`s so they can assign different weights to each model group.
+
+---
+
+## 5. Model Aliases (A/B Testing & Virtual Pools)
+
+In addition to Endpoint-Level routing, the Citadel framework supports **Model-Level Routing** via "Model Aliases" (e.g., `ab-test-gpt`). This is a completely separate layer of load balancing implemented entirely within the Gateway's XML/C# policies (`frag-set-target-backend-pool.xml`).
+
+When a client requests an alias (e.g., `ab-test-gpt`), the Gateway executes the following logic:
+
+### Step A: The Virtual Pool
+The Gateway detects that `ab-test-gpt` is an alias, not a real model. It looks up the members of this alias (e.g., `gpt-5` and `gpt-4`).
+
+### Step B: The C# Random Draw
+If the alias is configured with a `weighted` strategy (e.g., `weights: [80, 20]`), the C# policy inside APIM draws a random number between 1 and the total weight (100).
+* 80% of the time, the policy "picks" `gpt-5`.
+* 20% of the time, the policy "picks" `gpt-4`.
+
+### Step C: Body Rewrite
+The Gateway dynamically rewrites the client's HTTP request body, replacing `"model": "ab-test-gpt"` with the winning model (e.g., `"model": "gpt-5"`).
+
+### Step D: Handoff to Endpoint Routing
+Once the model is rewritten, the request is handed off to the standard **Endpoint-Level Native Routing** (described in Section 3) to find the best backend server that hosts the winning model!
