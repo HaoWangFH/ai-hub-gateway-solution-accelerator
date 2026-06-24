@@ -29,7 +29,11 @@ It is divided into two parts:
 > * [ ] **Entra ID (Managed Identity)**: If you prefer this, please whitelist our Gateway's Managed Identity Client ID: `[Insert your mi-EIST-apim-dev Client ID here]`.
 > * [ ] **Other**: Please specify (e.g., AWS SigV4, OAuth).
 > 
-> **3. Model Information**
+> **3. Traffic Routing & Cost Control (Weight)**
+> *Since you manage the backend AI services, please specify how much traffic this endpoint should receive relative to your other endpoints to control costs.*
+> * **Routing Weight (1-1000):** (e.g., `100`. If Endpoint A has a weight of 100 and Endpoint B has 200, B will receive twice as much traffic.)
+> 
+> **4. Model Information**
 > *Please list the exact models exposed on this endpoint so we can configure our routing tables.*
 > * **Model 1 Name:** (e.g., `gpt-4o`)
 >   * **Version:** (e.g., `2024-05-13`)
@@ -37,7 +41,7 @@ It is divided into two parts:
 >   * **Allocated Capacity:** (e.g., `100`k TPM)
 > * **Model 2 Name:** ...
 > 
-> **4. Network Security (Firewall Whitelisting)**
+> **5. Network Security (Firewall Whitelisting)**
 > *If your service restricts inbound traffic via a firewall, please whitelist our Gateway's outbound IP addresses:*
 > * **Primary Gateway IP:** `[Insert APIM Public VIP here]`
 > * **VNet Subnet Range:** `[Insert APIM VNet Address Space if peering internally]`
@@ -69,7 +73,7 @@ param llmBackendConfig = [
     backendType: 'azure-openai'                    // Map from their response (azure-openai, openai, anthropic, etc.)
     endpoint: 'https://ext-team.openai.azure.com/' // Map from their response
     priority: 2                                    // 1 is highest priority. Use 2 if this is a fallback backend.
-    weight: 100                                    // Traffic distribution weight (e.g. 100)
+    weight: 100                                    // Traffic distribution weight. Calculate this relative to your other backends based on the "Allocated Capacity" they provided! (e.g., if Backend A has 100k capacity and Backend B has 200k, set their weights to 100 and 200).
     
     // AUTHENTICATION CONFIGURATION
     // If they gave you an API Key:
