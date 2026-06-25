@@ -59,3 +59,20 @@ The following table outlines the capabilities of the full Citadel framework comp
 | **PII Anonymization** | ✅ Yes | ❌ **No** | Policy named values set to `https://placeholder.com`. |
 | **Content Safety Filtering** | ✅ Yes | ❌ **No** | Policy named values set to `https://placeholder.com`. |
 | **Semantic Caching** | ✅ Yes | ❌ **No** | Redis Cache resource does not exist in Azure. |
+
+---
+
+## 6. Component/Resource Status (MVP vs Full Framework)
+The following table compares the high-level Azure infrastructure components required for the full Citadel framework against what is currently provisioned for this bare MVP deployment.
+
+| High-Level Azure Component | Full Citadel Framework | Your Bare MVP Deployment | Purpose |
+| :--- | :--- | :--- | :--- |
+| **Azure API Management (APIM)** | ✅ Yes | ✅ **Yes** | Core gateway routing engine and load balancer. |
+| **User-Assigned Managed Identity** | ✅ Yes | ✅ **Yes** | Secures access to backend AI services. |
+| **Azure Event Hubs** | ✅ Yes | ✅ **Yes** | High-throughput streaming of raw usage telemetry. |
+| **App Insights & Log Analytics** | ✅ Yes | ✅ **Yes** | Monitoring, logs, and gateway health metrics. |
+| **Azure Cosmos DB** | ✅ Yes | ❌ **No** | Permanent storage for chargeback metrics and PowerBI dashboards. |
+| **Azure Logic App** | ✅ Yes | ❌ **No** | Data processor that moves telemetry from Event Hubs to Cosmos DB. |
+| **Azure AI Services (Foundry)** | ✅ Yes | ❌ **No** | Provides Language (PII) and Content Safety (Abuse) endpoints. |
+| **Azure Managed Redis** | ✅ Yes | ❌ **No** | High-performance semantic caching for repeated prompts. |
+| **Azure Key Vault** | ✅ Yes | ❌ **No** | Secure storage for external provider API keys (currently stored in APIM Named Values). |
