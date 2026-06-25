@@ -42,7 +42,14 @@ The Gateway exposes three distinct API surfaces simultaneously. You do not have 
 
 ---
 
-## 5. The Business Workflow (End-to-End)
+## 5. Policy Fragments (The Core Logic)
+The absolute heart of the APIM gateway's intelligence relies on **Policy Fragments**. These are reusable snippets of XML and C# code that act like centralized functions. Instead of copying and pasting the same logic into every API, the Gateway defines them once, ensuring universal consistency:
+* **The Router (`frag-set-target-backend-pool`):** This fragment executes on every request. It reads the requested model, resolves any Virtual Aliases (executing A/B testing math if needed), and instructs APIM which backend pool to route the traffic to.
+* **The Authenticator (`frag-set-backend-authorization`):** Once routed, this fragment determines how to unlock the target backend. It either generates an Entra ID token via Managed Identity (for Azure endpoints) or injects a secure API Key from APIM's Named Values (for Anthropic/Gemini).
+
+---
+
+## 6. The Business Workflow (End-to-End)
 
 The lifecycle of operating the AI Hub Gateway is divided into two distinct onboarding motions:
 
@@ -58,7 +65,7 @@ The lifecycle of operating the AI Hub Gateway is divided into two distinct onboa
 
 ---
 
-## 6. Feature Status (MVP vs Full Framework)
+## 7. Feature Status (MVP vs Full Framework)
 The following table outlines the capabilities of the full Citadel framework compared to the current MVP deployment (verified in Azure on `apim-eist-dev`):
 
 | Feature Category | Full Citadel Framework | Your Bare MVP Deployment | Notes on MVP State |
@@ -76,7 +83,7 @@ The following table outlines the capabilities of the full Citadel framework comp
 
 ---
 
-## 7. Component/Resource Status (MVP vs Full Framework)
+## 8. Component/Resource Status (MVP vs Full Framework)
 The following table compares the high-level Azure infrastructure components required for the full Citadel framework against what is currently provisioned for this bare MVP deployment.
 
 | High-Level Azure Component | Full Citadel Framework | Your Bare MVP Deployment | Purpose |
