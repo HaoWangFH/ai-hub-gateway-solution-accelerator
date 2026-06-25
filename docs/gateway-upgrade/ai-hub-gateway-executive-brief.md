@@ -7,10 +7,10 @@ The gateway acts as a centralized, highly-available entry point for all enterpri
 
 **Deployment Background (The Two Major Scripts):**
 The architecture is deployed via two primary Bicep scripts that separate the gateway configuration from its surrounding ecosystem:
-1. **`supporting-services.bicep`**: Provisions the surrounding governance ecosystem (e.g., Cosmos DB for dashboards, Logic Apps, Key Vault, and AI Content Safety endpoints).
-2. **`main.bicep`**: Configures the actual API Management instance itself (e.g., APIs, routing policies, backend pools, and named values). This script assumes the supporting services already exist.
+1. **`bicep/infra/apim-gateway-upgrade/supporting-services.bicep`**: Provisions the surrounding governance ecosystem (e.g., Cosmos DB for dashboards, Logic Apps, Key Vault, and AI Content Safety endpoints).
+2. **`bicep/infra/apim-gateway-upgrade/main.bicep`**: Configures the actual API Management instance itself (e.g., APIs, routing policies, backend pools, and named values). This script assumes the supporting services already exist.
 
-**Current MVP Scope:** Core API routing, advanced load-balancing, and usage telemetry are fully active via the `main.bicep` deployment. The `supporting-services.bicep` ecosystem (PII anonymization, Cosmos DB dashboards) and Entra ID (OAuth) authentication have been intentionally deferred to future phases to accelerate initial MVP adoption.
+**Current MVP Scope:** Core API routing, advanced load-balancing, and usage telemetry are fully active via the `bicep/infra/apim-gateway-upgrade/main.bicep` deployment. The `bicep/infra/apim-gateway-upgrade/supporting-services.bicep` ecosystem (PII anonymization, Cosmos DB dashboards) and Entra ID (OAuth) authentication have been intentionally deferred to future phases to accelerate initial MVP adoption.
 
 ---
 
