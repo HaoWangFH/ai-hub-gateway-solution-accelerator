@@ -5,7 +5,12 @@ The **AI Hub Gateway (Citadel v1)** has been successfully deployed to the existi
 
 The gateway acts as a centralized, highly-available entry point for all enterprise AI traffic. By decoupling the client applications from the underlying AI providers, the gateway allows the organization to seamlessly switch, upgrade, and load-balance AI models behind the scenes without breaking client code. 
 
-**Current MVP Scope:** Core API routing, advanced load-balancing, and usage telemetry are fully active. Advanced compliance features (PII anonymization) and Entra ID (OAuth) authentication have been intentionally deferred to future phases to accelerate initial adoption.
+**Deployment Background (The Two Major Scripts):**
+The architecture is deployed via two primary Bicep scripts that separate the gateway configuration from its surrounding ecosystem:
+1. **`supporting-services.bicep`**: Provisions the surrounding governance ecosystem (e.g., Cosmos DB for dashboards, Logic Apps, Key Vault, and AI Content Safety endpoints).
+2. **`main.bicep`**: Configures the actual API Management instance itself (e.g., APIs, routing policies, backend pools, and named values). This script assumes the supporting services already exist.
+
+**Current MVP Scope:** Core API routing, advanced load-balancing, and usage telemetry are fully active via the `main.bicep` deployment. The `supporting-services.bicep` ecosystem (PII anonymization, Cosmos DB dashboards) and Entra ID (OAuth) authentication have been intentionally deferred to future phases to accelerate initial MVP adoption.
 
 ---
 
