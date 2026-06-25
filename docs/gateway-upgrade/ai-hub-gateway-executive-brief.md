@@ -19,7 +19,16 @@ The gateway acts as a centralized, highly-available entry point for all enterpri
 
 ---
 
-## 3. High-Level Architecture & Components
+## 3. Available API Surfaces (How Clients Connect)
+The Gateway exposes three distinct API surfaces simultaneously. You do not have to pick just one; they exist side-by-side to serve different use cases:
+
+1. **Unified AI API (Recommended):** Perfect mimic of the standard OpenAI `v1` REST API. Clients can use standard off-the-shelf OpenAI Python/Node SDKs. The Gateway automatically translates these requests to Anthropic, Gemini, or Azure formats behind the scenes.
+2. **Azure OpenAI API (Legacy Compatibility):** Perfect mimic of the proprietary Azure OpenAI REST API. This ensures internal legacy applications that are strictly hardcoded to the Azure SDK can switch to the Gateway with zero code rewrites or downtime.
+3. **Universal LLM API (Explicit Control):** An older translation pattern that requires the client to explicitly name the backend in the URL. Useful for power-users who want to completely bypass the load balancer and manually select their own backend server.
+
+---
+
+## 4. High-Level Architecture & Components
 1. **Azure API Management (APIM):** The core engine. It executes XML/C# policies to intercept payloads, resolve model names, rewrite bodies, and route traffic. 
 2. **Virtual Network (VNet):** The gateway is injected into an internal VNet, ensuring all traffic remains private and secure from the public internet.
 3. **Backend Pools (Native APIM):** Dynamic groups of AI servers (e.g., `gpt-4o-pool`) that handle the load balancing math.
@@ -28,7 +37,7 @@ The gateway acts as a centralized, highly-available entry point for all enterpri
 
 ---
 
-## 4. The Business Workflow (End-to-End)
+## 5. The Business Workflow (End-to-End)
 
 The lifecycle of operating the AI Hub Gateway is divided into two distinct onboarding motions:
 
@@ -44,7 +53,7 @@ The lifecycle of operating the AI Hub Gateway is divided into two distinct onboa
 
 ---
 
-## 5. Feature Status (MVP vs Full Framework)
+## 6. Feature Status (MVP vs Full Framework)
 The following table outlines the capabilities of the full Citadel framework compared to the current MVP deployment (verified in Azure on `apim-eist-dev`):
 
 | Feature Category | Full Citadel Framework | Your Bare MVP Deployment | Notes on MVP State |
@@ -62,7 +71,7 @@ The following table outlines the capabilities of the full Citadel framework comp
 
 ---
 
-## 6. Component/Resource Status (MVP vs Full Framework)
+## 7. Component/Resource Status (MVP vs Full Framework)
 The following table compares the high-level Azure infrastructure components required for the full Citadel framework against what is currently provisioned for this bare MVP deployment.
 
 | High-Level Azure Component | Full Citadel Framework | Your Bare MVP Deployment | Purpose |
