@@ -97,3 +97,20 @@ The following table compares the high-level Azure infrastructure components requ
 | **Azure AI Services (Foundry)** | ✅ Yes | ❌ **No** | Provides Language (PII) and Content Safety (Abuse) endpoints. |
 | **Azure Managed Redis** | ✅ Yes | ❌ **No** | High-performance semantic caching for repeated prompts. |
 | **Azure Key Vault** | ✅ Yes | ❌ **No** | Secure storage for external provider API keys (currently stored in APIM Named Values). |
+
+---
+
+## 9. Future Enterprise Scaling Strategy
+While the current manual Standard Operating Procedure (SOP) is effective for the MVP, scaling across a large enterprise requires tracking, governance, and self-service. The following architectural processes are recommended for the next phase:
+
+### 1. Shift to "GitOps" via Pull Requests (For Onboarding Providers)
+* **The Process:** When an external team wants to onboard a new AI server, they submit a **Pull Request (PR)** modifying the `bicep/infra/apim-gateway-upgrade/main-eist-dev.bicepparam` file to add their endpoint and requested Weight.
+* **The Benefit:** Provides a perfect audit trail and requires a mandatory code review (Approval) from a Gateway Operator. Once approved, a CI/CD pipeline (e.g., GitHub Actions or Azure DevOps) automatically deploys the script.
+
+### 2. Enable the APIM Developer Portal (For Onboarding Clients)
+* **The Process:** Direct client developers to the built-in APIM Developer Portal instead of manually emailing them Subscription Keys.
+* **The Benefit:** Clients log in using their corporate Entra ID, interactively read the API documentation, and click to "Subscribe" to the AI Product. Upon approval, they instantly get their keys on a secure dashboard.
+
+### 3. Implement an ITSM Front-Door (ServiceNow / Jira)
+* **The Process:** External teams fill out a standardized request form in an IT Service Management tool to either "Provide a Model" or "Consume a Model".
+* **The Benefit:** Routes through standard corporate approval workflows. It can also be integrated with Azure Logic Apps to automatically trigger the APIM subscription creation once approved by a manager.
