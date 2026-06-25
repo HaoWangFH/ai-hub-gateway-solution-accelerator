@@ -41,3 +41,21 @@ The lifecycle of operating the AI Hub Gateway is divided into two distinct onboa
 1. **Create APIM Product:** The Gateway Operators group the APIs into a "Product" (e.g., `Alpha-Tier-Product`) and attach rate limits (e.g., 10,000 Tokens Per Minute).
 2. **Generate Credentials:** An APIM Subscription Key is generated and securely handed to the client application developers.
 3. **Client Integration:** The client developers point their standard Python/Node `OpenAI` SDK to the Gateway's URL and pass in the Subscription Key. The gateway immediately begins routing their traffic to the best available AI backend!
+
+---
+
+## 5. Feature Status (MVP vs Full Framework)
+The following table outlines the capabilities of the full Citadel framework compared to the current MVP deployment (verified in Azure on `apim-eist-dev`):
+
+| Feature Category | Full Citadel Framework | Your Bare MVP Deployment | Notes on MVP State |
+| :--- | :--- | :--- | :--- |
+| **Universal API Routing** | ✅ Yes | ✅ **Yes** | Fully active. |
+| **Smart Load Balancing** | ✅ Yes | ✅ **Yes** | Fully active (Native APIM Backend Pools). |
+| **Model Aliasing (A/B Testing)** | ✅ Yes | ✅ **Yes** | Fully active (C# Virtual Pools). |
+| **Backend Authentication** | ✅ Yes | ✅ **Yes** | Active via `mi-EIST-apim-dev` Managed Identity. |
+| **Telemetry Emission** | ✅ Yes | ⚠️ **Partial** | Emitting to `evhns-eist-apim-dev` Event Hubs namespace. |
+| **Usage Dashboards (Cosmos DB)**| ✅ Yes | ❌ **No** | Cosmos DB resource does not exist in Azure. Requires `supporting-services.bicep`. |
+| **Client Authentication** | ✅ Entra ID (OAuth) | ⚠️ **Sub Key Only** | JWT named values are set to `not-configured`. |
+| **PII Anonymization** | ✅ Yes | ❌ **No** | Policy named values set to `https://placeholder.com`. |
+| **Content Safety Filtering** | ✅ Yes | ❌ **No** | Policy named values set to `https://placeholder.com`. |
+| **Semantic Caching** | ✅ Yes | ❌ **No** | Redis Cache resource does not exist in Azure. |
