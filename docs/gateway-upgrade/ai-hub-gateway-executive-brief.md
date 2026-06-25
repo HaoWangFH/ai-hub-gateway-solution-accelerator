@@ -23,7 +23,7 @@ The gateway acts as a centralized, highly-available entry point for all enterpri
 1. **Azure API Management (APIM):** The core engine. It executes XML/C# policies to intercept payloads, resolve model names, rewrite bodies, and route traffic. 
 2. **Virtual Network (VNet):** The gateway is injected into an internal VNet, ensuring all traffic remains private and secure from the public internet.
 3. **Backend Pools (Native APIM):** Dynamic groups of AI servers (e.g., `gpt-4o-pool`) that handle the load balancing math.
-4. **Azure Event Hubs & App Insights:** Used asynchronously by the gateway to stream usage data (tokens used, models requested) without adding latency to the client's request. *(Note Gap: While the gateway successfully emits all telemetry to the Event Hub, a downstream consumer—such as an Azure Function or Stream Analytics—is required to pull this data from Event Hubs into Cosmos DB for the final dashboard. This consumer is outside the scope of the core gateway deployment.)*
+4. **Azure Event Hubs & App Insights:** Used asynchronously by the gateway to stream usage data (tokens used, models requested) without adding latency to the client's request. *(Note: While the core gateway deployment only emits to Event Hubs, the Citadel framework provides a pre-built **Azure Logic App** in the `supporting-services.bicep` deployment that automatically pulls this data from Event Hubs into Cosmos DB for dashboarding.)*
 5. **Managed Identity (UAMI):** Allows the gateway to securely authenticate to internal Azure AI services without hardcoding API keys.
 
 ---
