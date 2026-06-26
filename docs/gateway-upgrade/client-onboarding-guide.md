@@ -14,16 +14,22 @@ This document provides the standard operating procedure (SOP) for onboarding a n
 > Welcome! Your application has been granted access to the AI Hub Gateway. The Gateway acts as a single, unified endpoint that gives you access to a variety of AI models (GPT-4, Claude, Gemini, etc.) using the standard OpenAI SDKs.
 > 
 > ### Your Connection Details
-> Please configure your AI SDKs or HTTP clients with the following credentials:
+> Depending on the security tier your application has been assigned, you will connect using one of two methods:
 > 
+> **Path A: Standard Security (API Key)**
 > * **Base URL:** `https://apim-eist-dev.azure-api.net`
 > * **API Key (Ocp-Apim-Subscription-Key):** `[Provide the APIM Subscription Key securely]`
+> 
+> **Path B: Enterprise Security (Entra ID / JWT)**
+> * **Base URL:** `https://apim-eist-dev.azure-api.net`
+> * **Gateway Audience (Resource ID):** `api://[Gateway-App-Registration-ID]`
+> * **Your Client ID:** `[Client-App-Registration-ID]` (You must use your App Registration to fetch a dynamic Bearer token)
 > 
 > ### How to Connect (Examples)
 > 
 > You do not need to learn a new SDK. The Gateway is 100% compatible with standard OpenAI SDKs. You simply point the OpenAI SDK to our Gateway URL.
 > 
-> **Python (OpenAI SDK):**
+> **Python (OpenAI SDK) - Path A: API Key:**
 > ```python
 > from openai import OpenAI
 > 
@@ -40,7 +46,30 @@ This document provides the standard operating procedure (SOP) for onboarding a n
 > print(response.choices[0].message.content)
 > ```
 > 
-> **cURL / HTTP Request:**
+> **Python (OpenAI SDK) - Path B: Entra ID / JWT:**
+> ```python
+> from openai import AzureOpenAI
+> from azure.identity import DefaultAzureCredential
+> 
+> # Dynamically fetch an Entra ID token scoped to the Gateway's Audience
+> credential = DefaultAzureCredential()
+> token = credential.get_token("api://YOUR_GATEWAY_AUDIENCE_ID/.default")
+> 
+> client = AzureOpenAI(
+>     azure_endpoint="https://apim-eist-dev.azure-api.net/v1",
+>     api_version="2024-02-01",
+>     api_key=token.token, # Pass the dynamic JWT Token
+>     azure_ad_token=token.token
+> )
+> 
+> response = client.chat.completions.create(
+>     model="gpt-4o",
+>     messages=[{"role": "user", "content": "Hello, AI!"}]
+> )
+> print(response.choices[0].message.content)
+> ```
+> 
+> **cURL / HTTP Request (Path A):**
 > ```bash
 > curl -X POST https://apim-eist-dev.azure-api.net/v1/chat/completions \
 >   -H "Ocp-Apim-Subscription-Key: YOUR_SUBSCRIPTION_KEY" \
@@ -59,7 +88,17 @@ This document provides the standard operating procedure (SOP) for onboarding a n
 
 *Follow these steps to generate the credentials required by the client above.*
 
-### Step 1: Create an APIM Product
+### Step 1: Determine Authentication Path
+Determine whether the client will be onboarded using **Path A (Subscription Key)** or **Path B (Entra ID)**.
+* **If Path A:** Proceed to Steps 2 and 3 below.
+* **If Path B (Enterprise Security):**
+  1. Ensure the Gateway has a "Resource" App Registration in Entra ID (the Audience).
+  2. The Client team creates a "Client" App Registration.
+  3. Grant the Client App Registration the required API permissions/App Roles on the Gateway's App Registration.
+  4. Ensure `frag-entra-auth` is enabled in APIM policies for the API.
+  5. Provide the Gateway Audience ID to the client (they will not need an APIM Subscription Key).
+
+### Step 2: Create an APIM Product (For Path A)
 Products in APIM allow you to group APIs and apply usage quotas/rate limits to specific groups of clients.
 1. Open the Azure Portal -> **API Management service** (`apim-eist-dev`).
 2. Go to **Products** and click **+ Add**.
